@@ -1,0 +1,50 @@
+package com.exitreminder.gpstester
+
+data class PredictiveState(
+    val timestamp: Long = System.currentTimeMillis(),
+    val latitude: Double = 0.0,
+    val longitude: Double = 0.0,
+    val accuracy: Float = 0f,                    // GPS Accuracy in Metern
+    val distanceToTarget: Float = 0f,            // Distanz zum Ziel-Zentrum
+    val distanceToTrigger: Float = 0f,           // Distanz bis Trigger-Radius erreicht
+    val speedMps: Float = 0f,                    // Geschwindigkeit m/s
+    val speedKmh: Float = 0f,                    // Geschwindigkeit km/h
+    val speedCategory: SpeedCategory = SpeedCategory.STILL,
+    val etaSeconds: Float = 0f,                  // Geschätzte Zeit bis Trigger
+    val nextCheckSeconds: Float = 0f,            // Wann nächster GPS Check
+    val checkCount: Int = 0,                     // Anzahl GPS Checks
+    val inTriggerZone: Boolean = false,          // Sind wir im Trigger-Bereich?
+    val precisionMode: PrecisionMode = PrecisionMode.LOW_POWER,
+    val provider: String = ""                    // GPS, FUSED, etc.
+)
+
+enum class SpeedCategory(val label: String, val emoji: String, val safetyFactor: Float) {
+    STILL("Stillstand", "\uD83E\uDDCD", 0.95f),           // Kaum Bewegung
+    WALKING("Zu Fuss", "\uD83D\uDEB6", 0.70f),             // ~5 km/h
+    RUNNING("Joggen", "\uD83C\uDFC3", 0.55f),             // ~10 km/h
+    CYCLING("Fahrrad", "\uD83D\uDEB4", 0.45f),            // ~20 km/h
+    DRIVING("Auto", "\uD83D\uDE97", 0.25f)                // >30 km/h
+}
+
+enum class PrecisionMode(
+    val label: String,
+    val intervalMs: Long,
+    val priority: Int,
+    val distanceThreshold: Float  // Ab welcher Distanz zum Trigger
+) {
+    LOW_POWER("Low Power", 300_000, 104, 500f),           // >500m: alle 5 Min
+    BALANCED("Balanced", 60_000, 102, 200f),              // 200-500m: alle 60 Sek
+    HIGH_ACCURACY("High Accuracy", 10_000, 100, 50f),     // 50-200m: alle 10 Sek
+    MAXIMUM_PRECISION("Maximum Precision", 2_000, 100, 0f) // <50m: alle 2 Sek!
+}
+
+data class LogEntry(
+    val timestamp: Long,
+    val distance: Float,
+    val accuracy: Float,
+    val speedKmh: Float,
+    val category: SpeedCategory,
+    val mode: PrecisionMode,
+    val nextCheckSec: Float,
+    val event: String = ""
+)
