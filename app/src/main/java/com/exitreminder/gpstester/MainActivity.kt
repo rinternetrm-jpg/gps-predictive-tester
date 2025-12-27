@@ -143,7 +143,7 @@ class MainActivity : AppCompatActivity() {
             triggerRadius = radius,
             onStateUpdate = { state -> runOnUiThread { updateUI(state) } },
             onLogEntry = { entry -> runOnUiThread { logAdapter.addEntry(entry) } },
-            onTrigger = { runOnUiThread { onTrigger() } }
+            onTrigger = { distance, accuracy -> runOnUiThread { onTrigger(distance, accuracy) } }
         )
 
         locationManager?.startTracking()
@@ -211,8 +211,12 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
-    private fun onTrigger() {
-        Toast.makeText(this, "\uD83C\uDFAF TRIGGER! Du hast das Ziel erreicht!", Toast.LENGTH_LONG).show()
+    private fun onTrigger(distanceToCenter: Float, accuracy: Float) {
+        Toast.makeText(
+            this,
+            "\uD83C\uDFAF TRIGGER!\n${distanceToCenter.toInt()}m vom Ziel-Zentrum\n(GPS-Accuracy: \u00B1${accuracy.toInt()}m)",
+            Toast.LENGTH_LONG
+        ).show()
         // Hier könnte Vibration/Sound kommen
     }
 

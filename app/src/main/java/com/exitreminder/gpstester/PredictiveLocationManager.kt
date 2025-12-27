@@ -15,7 +15,7 @@ class PredictiveLocationManager(
     private val triggerRadius: Float,  // z.B. 5 Meter!
     private val onStateUpdate: (PredictiveState) -> Unit,
     private val onLogEntry: (LogEntry) -> Unit,
-    private val onTrigger: () -> Unit
+    private val onTrigger: (distanceToCenter: Float, accuracy: Float) -> Unit
 ) {
     companion object {
         private const val TAG = "PredictiveGPS"
@@ -201,7 +201,7 @@ class PredictiveLocationManager(
         // - Noch nicht getriggert
         if (inTriggerZone && location.accuracy <= MINIMUM_ACCURACY_FOR_TRIGGER && !hasTriggered) {
             hasTriggered = true
-            Log.d(TAG, "\uD83C\uDFAF TRIGGER! Distance: ${distanceToTarget}m, Accuracy: ${location.accuracy}m")
+            Log.d(TAG, "\uD83C\uDFAF TRIGGER! Distance to center: ${distanceToTarget}m, Accuracy: ${location.accuracy}m")
 
             onLogEntry(LogEntry(
                 timestamp = now,
@@ -211,10 +211,10 @@ class PredictiveLocationManager(
                 category = speedCategory,
                 mode = currentMode,
                 nextCheckSec = nextCheckSeconds,
-                event = "\uD83C\uDFAF TRIGGER! (Accuracy: ${location.accuracy.toInt()}m)"
+                event = "\uD83C\uDFAF TRIGGER! ${distanceToTarget.toInt()}m vom Ziel (GPS: \u00B1${location.accuracy.toInt()}m)"
             ))
 
-            onTrigger()
+            onTrigger(distanceToTarget, location.accuracy)
         } else if (inTriggerZone && location.accuracy > MINIMUM_ACCURACY_FOR_TRIGGER) {
             // In Zone aber Accuracy zu schlecht -> weiter tracken
             Log.d(TAG, "In trigger zone but accuracy too low: ${location.accuracy}m")
