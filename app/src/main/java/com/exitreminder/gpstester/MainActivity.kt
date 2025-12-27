@@ -15,6 +15,7 @@ import android.os.Vibrator
 import android.view.Gravity
 import android.widget.*
 import android.widget.ScrollView
+import android.widget.Switch
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.recyclerview.widget.LinearLayoutManager
@@ -48,6 +49,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnStart: Button
     private lateinit var btnStop: Button
     private lateinit var mapView: MapView
+    private lateinit var tvWifiStatus: TextView
+    private lateinit var tvWifiSSID: TextView
+    private lateinit var tvHomeDistance: TextView
+    private lateinit var switchWifiHybrid: Switch
 
     private val logAdapter = LogAdapter()
 
@@ -59,6 +64,7 @@ class MainActivity : AppCompatActivity() {
     private var targetLng: Double = 0.0
     private var startDistanceValue: Float = 0f
     private var locationManager: PredictiveLocationManager? = null
+    private var wifiManager: WifiLocationManager? = null
     private var service: ForegroundLocationService? = null
     private var isBound = false
 
@@ -101,6 +107,10 @@ class MainActivity : AppCompatActivity() {
         btnStart = findViewById(R.id.btnStart)
         btnStop = findViewById(R.id.btnStop)
         mapView = findViewById(R.id.mapView)
+        tvWifiStatus = findViewById(R.id.tvWifiStatus)
+        tvWifiSSID = findViewById(R.id.tvWifiSSID)
+        tvHomeDistance = findViewById(R.id.tvHomeDistance)
+        switchWifiHybrid = findViewById(R.id.switchWifiHybrid)
 
         rvLog.layoutManager = LinearLayoutManager(this)
         rvLog.adapter = logAdapter
@@ -263,6 +273,17 @@ class MainActivity : AppCompatActivity() {
         locationManager?.setBatteryStart(batteryLevel)
         locationManager?.startTracking()
 
+        // WLAN Hybrid Modus starten wenn aktiviert
+        if (switchWifiHybrid.isChecked) {
+            wifiManager = WifiLocationManager(
+                context = this,
+                onStateUpdate = { state -> runOnUiThread { updateWifiUI(state) } },
+                onLogEntry = { entry -> runOnUiThread { logAdapter.addEntry(entry) } },
+                onTrigger = { runOnUiThread { onWifiTrigger() } }
+            )
+            wifiManager?.startMonitoring()
+        }
+
         btnStart.isEnabled = false
         btnStop.isEnabled = true
 
@@ -273,6 +294,9 @@ class MainActivity : AppCompatActivity() {
     private fun stopTracking() {
         locationManager?.stopTracking()
         locationManager = null
+
+        wifiManager?.stopMonitoring()
+        wifiManager = null
 
         if (isBound) {
             unbindService(connection)
@@ -585,6 +609,77 @@ class MainActivity : AppCompatActivity() {
         if (needed.isNotEmpty()) {
             ActivityCompat.requestPermissions(this, needed.toTypedArray(), 1001)
         }
+    }
+
+    private fun updateWifiUI(state: WifiState) {
+        tvWifiStatus.text = "${state.status.emoji} ${state.status.label}"
+        tvWifiSSID.text = state.ssid ?: "—"
+
+        // Status Farbe
+        val statusColor = when (state.status) {
+            WifiStatus.CONNECTED -> 0xFF22c55e.toInt()       // Grün
+            WifiStatus.WIFI_OUTAGE -> 0xFFeab308.toInt()     // Gelb
+            WifiStatus.DEBOUNCING,
+            WifiStatus.VERIFYING -> 0xFF06b6d4.toInt()       // Cyan
+            WifiStatus.TRACKING_MOVEMENT -> 0xFFf97316.toInt() // Orange
+            WifiStatus.TRIGGERED -> 0xFFef4444.toInt()       // Rot
+            else -> 0xFF9898a8.toInt()                        // Grau
+        }
+        tvWifiStatus.setTextColor(statusColor)
+
+        // Home Location anzeigen
+        state.homeLocation?.let { home ->
+            tvHomeDistance.text = "${home.latitude.format(4)}, ${home.longitude.format(4)}"
+        }
+    }
+
+    private fun Double.format(digits: Int) = "%.${digits}f".format(this)
+
+    private fun onWifiTrigger() {
+        // Vibration
+        val vibrator = getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+        vibrator.vibrate(VibrationEffect.createWaveform(longArrayOf(0, 300, 150, 300, 150, 600), -1))
+
+        Toast.makeText(this, "\uD83D\uDCF6\uD83C\uDFAF WLAN TRIGGER! Du hast Zuhause verlassen!", Toast.LENGTH_LONG).show()
+
+        // Custom Dialog
+        val layout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(60, 40, 60, 40)
+            setBackgroundColor(Color.parseColor("#1c1c26"))
+        }
+
+        val emojiView = TextView(this).apply {
+            text = "\uD83C\uDFE0\u27A1\uFE0F\uD83D\uDEB6"
+            textSize = 40f
+            gravity = Gravity.CENTER
+        }
+        layout.addView(emojiView)
+
+        val titleView = TextView(this).apply {
+            text = "WLAN TRIGGER!"
+            textSize = 24f
+            setTextColor(Color.parseColor("#22c55e"))
+            setTypeface(null, Typeface.BOLD)
+            gravity = Gravity.CENTER
+            setPadding(0, 20, 0, 10)
+        }
+        layout.addView(titleView)
+
+        val descView = TextView(this).apply {
+            text = "Du hast dein Zuhause verlassen!\n\nWLAN getrennt + GPS bestätigt Entfernung."
+            textSize = 14f
+            setTextColor(Color.parseColor("#9898a8"))
+            gravity = Gravity.CENTER
+            setPadding(0, 10, 0, 20)
+        }
+        layout.addView(descView)
+
+        AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+            .setView(layout)
+            .setPositiveButton("OK") { dialog, _ -> dialog.dismiss() }
+            .setCancelable(false)
+            .show()
     }
 
     override fun onDestroy() {
