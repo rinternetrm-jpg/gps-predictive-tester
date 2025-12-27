@@ -1,11 +1,16 @@
 package com.exitreminder.gpstester
 
 import android.Manifest
+import android.app.AlertDialog
 import android.content.*
 import android.content.pm.PackageManager
+import android.graphics.Color
 import android.location.Geocoder
 import android.os.Bundle
 import android.os.IBinder
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.view.Gravity
 import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
@@ -212,12 +217,112 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun onTrigger(distanceToCenter: Float, accuracy: Float) {
-        Toast.makeText(
-            this,
-            "\uD83C\uDFAF TRIGGER!\n${distanceToCenter.toInt()}m vom Ziel-Zentrum\n(GPS-Accuracy: \u00B1${accuracy.toInt()}m)",
-            Toast.LENGTH_LONG
-        ).show()
-        // Hier könnte Vibration/Sound kommen
+        // Vibration
+        val vibrator = getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
+        vibrator.vibrate(VibrationEffect.createWaveform(longArrayOf(0, 200, 100, 200, 100, 400), -1))
+
+        // Trigger-Radius aus SeekBar
+        val triggerRadius = seekRadius.progress
+
+        // Bewertung der Genauigkeit
+        val (rating, ratingColor) = when {
+            distanceToCenter <= 5 -> "PERFEKT!" to "#22c55e"
+            distanceToCenter <= 10 -> "Sehr gut" to "#84cc16"
+            distanceToCenter <= 15 -> "Gut" to "#eab308"
+            else -> "OK" to "#f97316"
+        }
+
+        // Custom Dialog Layout
+        val layout = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(60, 40, 60, 20)
+            setBackgroundColor(Color.parseColor("#1c1c26"))
+        }
+
+        // Emoji
+        val emojiView = TextView(this).apply {
+            text = "\uD83C\uDFAF"
+            textSize = 48f
+            gravity = Gravity.CENTER
+        }
+        layout.addView(emojiView)
+
+        // Titel
+        val titleView = TextView(this).apply {
+            text = "TRIGGER!"
+            textSize = 28f
+            setTextColor(Color.parseColor("#22c55e"))
+            gravity = Gravity.CENTER
+            setPadding(0, 20, 0, 30)
+        }
+        layout.addView(titleView)
+
+        // Distanz zum Ziel-Zentrum (Hauptinfo)
+        val distanceLabel = TextView(this).apply {
+            text = "Distanz zum Ziel-Zentrum:"
+            textSize = 14f
+            setTextColor(Color.parseColor("#9898a8"))
+            gravity = Gravity.CENTER
+        }
+        layout.addView(distanceLabel)
+
+        val distanceValue = TextView(this).apply {
+            text = "${distanceToCenter.toInt()} Meter"
+            textSize = 36f
+            setTextColor(Color.parseColor("#3b82f6"))
+            gravity = Gravity.CENTER
+            setPadding(0, 10, 0, 20)
+        }
+        layout.addView(distanceValue)
+
+        // Bewertung
+        val ratingView = TextView(this).apply {
+            text = rating
+            textSize = 20f
+            setTextColor(Color.parseColor(ratingColor))
+            gravity = Gravity.CENTER
+            setPadding(0, 0, 0, 30)
+        }
+        layout.addView(ratingView)
+
+        // Details Box
+        val detailsBox = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(Color.parseColor("#22222e"))
+            setPadding(40, 30, 40, 30)
+        }
+
+        val detail1 = TextView(this).apply {
+            text = "Trigger-Radius: ${triggerRadius}m"
+            textSize = 14f
+            setTextColor(Color.parseColor("#9898a8"))
+        }
+        detailsBox.addView(detail1)
+
+        val detail2 = TextView(this).apply {
+            text = "GPS-Accuracy: \u00B1${accuracy.toInt()}m"
+            textSize = 14f
+            setTextColor(Color.parseColor("#9898a8"))
+            setPadding(0, 10, 0, 0)
+        }
+        detailsBox.addView(detail2)
+
+        val detail3 = TextView(this).apply {
+            text = "Abweichung: ${(distanceToCenter - 0).toInt()}m"
+            textSize = 14f
+            setTextColor(Color.parseColor("#9898a8"))
+            setPadding(0, 10, 0, 0)
+        }
+        detailsBox.addView(detail3)
+
+        layout.addView(detailsBox)
+
+        // Dialog anzeigen
+        AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
+            .setView(layout)
+            .setPositiveButton("OK") { dialog, _ -> dialog.dismiss() }
+            .setCancelable(false)
+            .show()
     }
 
     private fun checkPermissions() {
