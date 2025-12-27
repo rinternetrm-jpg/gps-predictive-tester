@@ -5,13 +5,16 @@ import android.app.AlertDialog
 import android.content.*
 import android.content.pm.PackageManager
 import android.graphics.Color
+import android.graphics.Typeface
 import android.location.Geocoder
+import android.os.BatteryManager
 import android.os.Bundle
 import android.os.IBinder
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.view.Gravity
 import android.widget.*
+import android.widget.ScrollView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.recyclerview.widget.LinearLayoutManager
@@ -135,6 +138,10 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
+        // Akku-Level am Start messen
+        val batteryManager = getSystemService(Context.BATTERY_SERVICE) as BatteryManager
+        val batteryLevel = batteryManager.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
+
         // Start foreground service
         val serviceIntent = Intent(this, ForegroundLocationService::class.java)
         startForegroundService(serviceIntent)
@@ -148,9 +155,11 @@ class MainActivity : AppCompatActivity() {
             triggerRadius = radius,
             onStateUpdate = { state -> runOnUiThread { updateUI(state) } },
             onLogEntry = { entry -> runOnUiThread { logAdapter.addEntry(entry) } },
-            onTrigger = { distance, accuracy -> runOnUiThread { onTrigger(distance, accuracy) } }
+            onTrigger = { stats -> runOnUiThread { onTrigger(stats) } }
         )
 
+        // Akku-Level übergeben
+        locationManager?.setBatteryStart(batteryLevel)
         locationManager?.startTracking()
 
         btnStart.isEnabled = false
@@ -216,113 +225,237 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
-    private fun onTrigger(distanceToCenter: Float, accuracy: Float) {
+    private fun onTrigger(stats: TrackingStats) {
         // Vibration
         val vibrator = getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
         vibrator.vibrate(VibrationEffect.createWaveform(longArrayOf(0, 200, 100, 200, 100, 400), -1))
 
-        // Trigger-Radius aus SeekBar
-        val triggerRadius = seekRadius.progress
+        // Akku-Level am Ende messen
+        val batteryManager = getSystemService(Context.BATTERY_SERVICE) as BatteryManager
+        val batteryEnd = batteryManager.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
+        val batteryUsed = stats.batteryStart - batteryEnd
+
+        // Dauer formatieren
+        val durationMin = stats.totalDurationMs / 60000
+        val durationSec = (stats.totalDurationMs % 60000) / 1000
+        val durationStr = if (durationMin > 0) "${durationMin}m ${durationSec}s" else "${durationSec}s"
 
         // Bewertung der Genauigkeit
         val (rating, ratingColor) = when {
-            distanceToCenter <= 5 -> "PERFEKT!" to "#22c55e"
-            distanceToCenter <= 10 -> "Sehr gut" to "#84cc16"
-            distanceToCenter <= 15 -> "Gut" to "#eab308"
+            stats.triggerDistance <= 5 -> "PERFEKT!" to "#22c55e"
+            stats.triggerDistance <= 10 -> "Sehr gut" to "#84cc16"
+            stats.triggerDistance <= 15 -> "Gut" to "#eab308"
             else -> "OK" to "#f97316"
+        }
+
+        // ScrollView für langes Pop-up
+        val scrollView = ScrollView(this).apply {
+            setBackgroundColor(Color.parseColor("#1c1c26"))
         }
 
         // Custom Dialog Layout
         val layout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(60, 40, 60, 20)
-            setBackgroundColor(Color.parseColor("#1c1c26"))
+            setPadding(60, 40, 60, 40)
         }
+        scrollView.addView(layout)
 
-        // Emoji
+        // Emoji + Titel
+        val headerLayout = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+        }
         val emojiView = TextView(this).apply {
             text = "\uD83C\uDFAF"
-            textSize = 48f
-            gravity = Gravity.CENTER
+            textSize = 40f
         }
-        layout.addView(emojiView)
-
-        // Titel
         val titleView = TextView(this).apply {
-            text = "TRIGGER!"
+            text = " TRIGGER!"
             textSize = 28f
             setTextColor(Color.parseColor("#22c55e"))
-            gravity = Gravity.CENTER
-            setPadding(0, 20, 0, 30)
+            setTypeface(null, Typeface.BOLD)
         }
-        layout.addView(titleView)
+        headerLayout.addView(emojiView)
+        headerLayout.addView(titleView)
+        layout.addView(headerLayout)
 
         // Distanz zum Ziel-Zentrum (Hauptinfo)
         val distanceLabel = TextView(this).apply {
             text = "Distanz zum Ziel-Zentrum:"
-            textSize = 14f
+            textSize = 13f
             setTextColor(Color.parseColor("#9898a8"))
             gravity = Gravity.CENTER
+            setPadding(0, 30, 0, 0)
         }
         layout.addView(distanceLabel)
 
         val distanceValue = TextView(this).apply {
-            text = "${distanceToCenter.toInt()} Meter"
-            textSize = 36f
+            text = "${stats.triggerDistance.toInt()} Meter"
+            textSize = 42f
             setTextColor(Color.parseColor("#3b82f6"))
             gravity = Gravity.CENTER
-            setPadding(0, 10, 0, 20)
+            setTypeface(null, Typeface.BOLD)
         }
         layout.addView(distanceValue)
 
-        // Bewertung
         val ratingView = TextView(this).apply {
             text = rating
-            textSize = 20f
+            textSize = 18f
             setTextColor(Color.parseColor(ratingColor))
             gravity = Gravity.CENTER
-            setPadding(0, 0, 0, 30)
+            setPadding(0, 5, 0, 25)
         }
         layout.addView(ratingView)
 
-        // Details Box
-        val detailsBox = LinearLayout(this).apply {
+        // === VERGLEICHS-STATISTIKEN ===
+        val statsHeader = TextView(this).apply {
+            text = "\uD83D\uDCCA GPS-ANFRAGEN VERGLEICH"
+            textSize = 12f
+            setTextColor(Color.parseColor("#5c5c6c"))
+            gravity = Gravity.CENTER
+            setPadding(0, 20, 0, 10)
+        }
+        layout.addView(statsHeader)
+
+        val statsBox = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(Color.parseColor("#22222e"))
             setPadding(40, 30, 40, 30)
         }
 
-        val detail1 = TextView(this).apply {
-            text = "Trigger-Radius: ${triggerRadius}m"
-            textSize = 14f
-            setTextColor(Color.parseColor("#9898a8"))
-        }
-        detailsBox.addView(detail1)
+        // Predictive (unsere Methode) - GRÜN hervorgehoben
+        val predictiveRow = createStatsRow(
+            "\u2705 Predictive (unsere Methode)",
+            "${stats.predictiveChecks} Checks",
+            "#22c55e",
+            true
+        )
+        statsBox.addView(predictiveRow)
 
-        val detail2 = TextView(this).apply {
-            text = "GPS-Accuracy: \u00B1${accuracy.toInt()}m"
-            textSize = 14f
-            setTextColor(Color.parseColor("#9898a8"))
-            setPadding(0, 10, 0, 0)
-        }
-        detailsBox.addView(detail2)
+        // Konstant alle 2 Sek
+        val highRow = createStatsRow(
+            "\u274C Konstant (alle 2s)",
+            "${stats.constantHighChecks} Checks",
+            "#ef4444"
+        )
+        statsBox.addView(highRow)
 
-        val detail3 = TextView(this).apply {
-            text = "Abweichung: ${(distanceToCenter - 0).toInt()}m"
-            textSize = 14f
-            setTextColor(Color.parseColor("#9898a8"))
-            setPadding(0, 10, 0, 0)
+        // Konstant alle 10 Sek
+        val mediumRow = createStatsRow(
+            "\u26A0\uFE0F Standard Geofence (10s)",
+            "${stats.constantMediumChecks} Checks",
+            "#eab308"
+        )
+        statsBox.addView(mediumRow)
+
+        layout.addView(statsBox)
+
+        // === ERSPARNIS ===
+        if (stats.savingsVsConstantHigh > 0) {
+            val savingsBox = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setBackgroundColor(Color.parseColor("#14532d"))
+                setPadding(40, 25, 40, 25)
+            }
+
+            val savingsTitle = TextView(this).apply {
+                text = "\uD83D\uDD0B ERSPARNIS"
+                textSize = 12f
+                setTextColor(Color.parseColor("#4ade80"))
+                gravity = Gravity.CENTER
+            }
+            savingsBox.addView(savingsTitle)
+
+            val savingsValue = TextView(this).apply {
+                text = "${stats.savingsVsConstantHigh.toInt()}% weniger GPS-Anfragen"
+                textSize = 18f
+                setTextColor(Color.parseColor("#22c55e"))
+                gravity = Gravity.CENTER
+                setTypeface(null, Typeface.BOLD)
+                setPadding(0, 5, 0, 0)
+            }
+            savingsBox.addView(savingsValue)
+
+            val savingsDetail = TextView(this).apply {
+                text = "vs. konstantes High-Accuracy GPS"
+                textSize = 11f
+                setTextColor(Color.parseColor("#4ade80"))
+                gravity = Gravity.CENTER
+            }
+            savingsBox.addView(savingsDetail)
+
+            layout.addView(savingsBox)
         }
-        detailsBox.addView(detail3)
+
+        // === WEITERE DETAILS ===
+        val detailsBox = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(Color.parseColor("#22222e"))
+            setPadding(40, 25, 40, 25)
+        }
+
+        val details = listOf(
+            "Tracking-Dauer" to durationStr,
+            "Start-Distanz" to "${stats.startDistance.toInt()}m",
+            "GPS-Accuracy" to "\u00B1${stats.triggerAccuracy.toInt()}m",
+            "Akku verbraucht" to "${if (batteryUsed > 0) batteryUsed else "<1"}%"
+        )
+
+        details.forEach { (label, value) ->
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                setPadding(0, 8, 0, 8)
+            }
+            val labelView = TextView(this).apply {
+                text = label
+                textSize = 13f
+                setTextColor(Color.parseColor("#9898a8"))
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            }
+            val valueView = TextView(this).apply {
+                text = value
+                textSize = 13f
+                setTextColor(Color.parseColor("#ffffff"))
+                setTypeface(null, Typeface.BOLD)
+            }
+            row.addView(labelView)
+            row.addView(valueView)
+            detailsBox.addView(row)
+        }
 
         layout.addView(detailsBox)
 
         // Dialog anzeigen
         AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
-            .setView(layout)
+            .setView(scrollView)
             .setPositiveButton("OK") { dialog, _ -> dialog.dismiss() }
             .setCancelable(false)
             .show()
+    }
+
+    private fun createStatsRow(label: String, value: String, color: String, highlight: Boolean = false): LinearLayout {
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, 12, 0, 12)
+            if (highlight) {
+                setBackgroundColor(Color.parseColor("#1a3a1a"))
+            }
+
+            val labelView = TextView(this@MainActivity).apply {
+                text = label
+                textSize = 12f
+                setTextColor(Color.parseColor(if (highlight) "#4ade80" else "#9898a8"))
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            }
+            val valueView = TextView(this@MainActivity).apply {
+                text = value
+                textSize = 14f
+                setTextColor(Color.parseColor(color))
+                setTypeface(null, Typeface.BOLD)
+            }
+            addView(labelView)
+            addView(valueView)
+        }
     }
 
     private fun checkPermissions() {

@@ -48,3 +48,34 @@ data class LogEntry(
     val nextCheckSec: Float,
     val event: String = ""
 )
+
+/**
+ * Tracking-Statistiken für den Vergleich verschiedener Methoden
+ */
+data class TrackingStats(
+    val startTime: Long = 0,
+    val endTime: Long = 0,
+    val totalDurationMs: Long = 0,
+    val startDistance: Float = 0f,           // Start-Distanz zum Ziel
+
+    // Unsere Predictive Methode
+    val predictiveChecks: Int = 0,
+
+    // Vergleichswerte (hochgerechnet)
+    val constantHighChecks: Int = 0,         // Alle 2 Sek (wie Maximum Precision durchgehend)
+    val constantMediumChecks: Int = 0,       // Alle 10 Sek (Standard Geofencing)
+    val constantLowChecks: Int = 0,          // Alle 60 Sek (Battery Saver)
+
+    // Akku
+    val batteryStart: Int = 0,               // Akku-Level am Start (%)
+    val batteryEnd: Int = 0,                 // Akku-Level am Ende (%)
+    val batteryUsed: Int = 0,                // Verbrauchter Akku (%)
+
+    // Effizienz
+    val savingsVsConstantHigh: Float = 0f,   // % Ersparnis vs alle 2 Sek
+    val savingsVsConstantMedium: Float = 0f, // % Ersparnis vs alle 10 Sek
+
+    // Genauigkeit
+    val triggerDistance: Float = 0f,         // Bei welcher Distanz getriggert
+    val triggerAccuracy: Float = 0f          // GPS-Accuracy beim Trigger
+)

@@ -15,7 +15,7 @@ class PredictiveLocationManager(
     private val triggerRadius: Float,  // z.B. 5 Meter!
     private val onStateUpdate: (PredictiveState) -> Unit,
     private val onLogEntry: (LogEntry) -> Unit,
-    private val onTrigger: (distanceToCenter: Float, accuracy: Float) -> Unit
+    private val onTrigger: (stats: TrackingStats) -> Unit
 ) {
     companion object {
         private const val TAG = "PredictiveGPS"
@@ -41,6 +41,15 @@ class PredictiveLocationManager(
     private val speedHistory = mutableListOf<Float>()
     private val maxSpeedHistory = 5
 
+    // Statistik-Tracking
+    private var trackingStartTime: Long = 0
+    private var startDistance: Float = 0f
+    private var batteryStart: Int = 0
+
+    fun setBatteryStart(level: Int) {
+        batteryStart = level
+    }
+
     @SuppressLint("MissingPermission")
     fun startTracking() {
         if (isTracking) return
@@ -49,6 +58,8 @@ class PredictiveLocationManager(
         checkCount = 0
         speedHistory.clear()
         lastLocation = null
+        trackingStartTime = System.currentTimeMillis()
+        startDistance = 0f  // Wird beim ersten Location-Update gesetzt
 
         Log.d(TAG, "Starting tracking to target: $targetLat, $targetLng (radius: ${triggerRadius}m)")
 
@@ -100,6 +111,12 @@ class PredictiveLocationManager(
         )
         val distanceToTarget = results[0]
         val distanceToTrigger = (distanceToTarget - triggerRadius).coerceAtLeast(0f)
+
+        // Beim ersten Check: Start-Distanz speichern
+        if (startDistance == 0f) {
+            startDistance = distanceToTarget
+            Log.d(TAG, "Start distance: ${startDistance.toInt()}m")
+        }
 
         // === 2. GESCHWINDIGKEIT BERECHNEN ===
         lastLocation?.let { last ->
@@ -203,6 +220,39 @@ class PredictiveLocationManager(
             hasTriggered = true
             Log.d(TAG, "\uD83C\uDFAF TRIGGER! Distance to center: ${distanceToTarget}m, Accuracy: ${location.accuracy}m")
 
+            // === STATISTIKEN BERECHNEN ===
+            val totalDurationMs = now - trackingStartTime
+            val totalDurationSec = totalDurationMs / 1000f
+
+            // Vergleichswerte: Wie viele Checks hätten andere Methoden gebraucht?
+            val constantHighChecks = (totalDurationSec / 2).toInt()      // Alle 2 Sek
+            val constantMediumChecks = (totalDurationSec / 10).toInt()   // Alle 10 Sek
+            val constantLowChecks = (totalDurationSec / 60).toInt()      // Alle 60 Sek
+
+            // Ersparnis berechnen
+            val savingsVsHigh = if (constantHighChecks > 0) {
+                ((constantHighChecks - checkCount).toFloat() / constantHighChecks * 100)
+            } else 0f
+            val savingsVsMedium = if (constantMediumChecks > 0) {
+                ((constantMediumChecks - checkCount).toFloat() / constantMediumChecks * 100)
+            } else 0f
+
+            val stats = TrackingStats(
+                startTime = trackingStartTime,
+                endTime = now,
+                totalDurationMs = totalDurationMs,
+                startDistance = startDistance,
+                predictiveChecks = checkCount,
+                constantHighChecks = constantHighChecks,
+                constantMediumChecks = constantMediumChecks,
+                constantLowChecks = constantLowChecks,
+                batteryStart = batteryStart,
+                savingsVsConstantHigh = savingsVsHigh,
+                savingsVsConstantMedium = savingsVsMedium,
+                triggerDistance = distanceToTarget,
+                triggerAccuracy = location.accuracy
+            )
+
             onLogEntry(LogEntry(
                 timestamp = now,
                 distance = distanceToTarget,
@@ -211,10 +261,10 @@ class PredictiveLocationManager(
                 category = speedCategory,
                 mode = currentMode,
                 nextCheckSec = nextCheckSeconds,
-                event = "\uD83C\uDFAF TRIGGER! ${distanceToTarget.toInt()}m vom Ziel (GPS: \u00B1${location.accuracy.toInt()}m)"
+                event = "\uD83C\uDFAF TRIGGER! ${distanceToTarget.toInt()}m vom Ziel (GPS: \u00B1${location.accuracy.toInt()}m) | ${checkCount} Checks"
             ))
 
-            onTrigger(distanceToTarget, location.accuracy)
+            onTrigger(stats)
         } else if (inTriggerZone && location.accuracy > MINIMUM_ACCURACY_FOR_TRIGGER) {
             // In Zone aber Accuracy zu schlecht -> weiter tracken
             Log.d(TAG, "In trigger zone but accuracy too low: ${location.accuracy}m")
