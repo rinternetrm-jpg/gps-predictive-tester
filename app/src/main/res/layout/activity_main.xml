@@ -335,31 +335,92 @@
         </LinearLayout>
     </LinearLayout>
 
-    <!-- ETA -->
+    <!-- Map + ETA Row -->
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:orientation="vertical"
-        android:padding="16dp"
-        android:background="@drawable/card_background"
-        android:layout_margin="16dp">
+        android:orientation="horizontal"
+        android:paddingHorizontal="16dp"
+        android:paddingTop="8dp">
 
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="GESCHÄTZTE ANKUNFT AM TRIGGER"
-            android:textSize="10sp"
-            android:textColor="#5c5c6c" />
+        <!-- Mini-Map -->
+        <FrameLayout
+            android:layout_width="0dp"
+            android:layout_height="140dp"
+            android:layout_weight="1.5"
+            android:background="@drawable/card_background"
+            android:clipChildren="true"
+            android:clipToPadding="true">
 
-        <TextView
-            android:id="@+id/tvETA"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="—"
-            android:textSize="28sp"
-            android:textStyle="bold"
-            android:textColor="#eab308"
-            android:fontFamily="monospace" />
+            <org.osmdroid.views.MapView
+                android:id="@+id/mapView"
+                android:layout_width="match_parent"
+                android:layout_height="match_parent" />
+
+            <TextView
+                android:id="@+id/tvMapLabel"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_gravity="top|start"
+                android:layout_margin="8dp"
+                android:text="LIVE MAP"
+                android:textSize="9sp"
+                android:textColor="#5c5c6c"
+                android:background="#CC1c1c26"
+                android:padding="4dp" />
+        </FrameLayout>
+
+        <!-- ETA Box -->
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="140dp"
+            android:layout_weight="1"
+            android:layout_marginStart="8dp"
+            android:orientation="vertical"
+            android:background="@drawable/card_background"
+            android:padding="12dp"
+            android:gravity="center">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="ETA"
+                android:textSize="10sp"
+                android:textColor="#5c5c6c" />
+
+            <TextView
+                android:id="@+id/tvETA"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="—"
+                android:textSize="24sp"
+                android:textStyle="bold"
+                android:textColor="#eab308"
+                android:fontFamily="monospace"
+                android:gravity="center" />
+
+            <View
+                android:layout_width="40dp"
+                android:layout_height="1dp"
+                android:layout_marginVertical="8dp"
+                android:background="#2d2d3a" />
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="START"
+                android:textSize="9sp"
+                android:textColor="#5c5c6c" />
+
+            <TextView
+                android:id="@+id/tvStartDistance"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="—"
+                android:textSize="14sp"
+                android:textColor="#9898a8"
+                android:fontFamily="monospace" />
+        </LinearLayout>
     </LinearLayout>
 
     <!-- Log -->
@@ -370,14 +431,17 @@
         android:textSize="11sp"
         android:textColor="#5c5c6c"
         android:letterSpacing="0.1"
-        android:paddingHorizontal="16dp" />
+        android:paddingHorizontal="16dp"
+        android:paddingTop="12dp" />
 
     <androidx.recyclerview.widget.RecyclerView
         android:id="@+id/rvLog"
         android:layout_width="match_parent"
         android:layout_height="0dp"
         android:layout_weight="1"
-        android:layout_margin="16dp"
+        android:layout_marginHorizontal="16dp"
+        android:layout_marginTop="8dp"
+        android:layout_marginBottom="8dp"
         android:background="@drawable/card_background"
         android:padding="8dp"
         android:clipToPadding="false" />

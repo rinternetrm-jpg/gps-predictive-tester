@@ -19,6 +19,14 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import org.osmdroid.config.Configuration
+import org.osmdroid.tileprovider.tilesource.TileSourceFactory
+import org.osmdroid.util.GeoPoint
+import org.osmdroid.views.CustomZoomButtonsController
+import org.osmdroid.views.MapView
+import org.osmdroid.views.overlay.Marker
+import org.osmdroid.views.overlay.Polyline
+import java.io.File
 import java.util.*
 
 class MainActivity : AppCompatActivity() {
@@ -35,11 +43,21 @@ class MainActivity : AppCompatActivity() {
     private lateinit var tvNextCheck: TextView
     private lateinit var tvCheckCount: TextView
     private lateinit var tvETA: TextView
+    private lateinit var tvStartDistance: TextView
     private lateinit var rvLog: RecyclerView
     private lateinit var btnStart: Button
     private lateinit var btnStop: Button
+    private lateinit var mapView: MapView
 
     private val logAdapter = LogAdapter()
+
+    // Map Marker
+    private var currentPosMarker: Marker? = null
+    private var targetMarker: Marker? = null
+    private var routeLine: Polyline? = null
+    private var targetLat: Double = 0.0
+    private var targetLng: Double = 0.0
+    private var startDistanceValue: Float = 0f
     private var locationManager: PredictiveLocationManager? = null
     private var service: ForegroundLocationService? = null
     private var isBound = false
@@ -78,16 +96,94 @@ class MainActivity : AppCompatActivity() {
         tvNextCheck = findViewById(R.id.tvNextCheck)
         tvCheckCount = findViewById(R.id.tvCheckCount)
         tvETA = findViewById(R.id.tvETA)
+        tvStartDistance = findViewById(R.id.tvStartDistance)
         rvLog = findViewById(R.id.rvLog)
         btnStart = findViewById(R.id.btnStart)
         btnStop = findViewById(R.id.btnStop)
+        mapView = findViewById(R.id.mapView)
 
         rvLog.layoutManager = LinearLayoutManager(this)
         rvLog.adapter = logAdapter
 
+        // OSMDroid konfigurieren
+        initMap()
+
         // Default: Breitenstein 17, Walchwil (Beispiel)
         etLat.setText("47.1189")
         etLng.setText("8.5160")
+    }
+
+    private fun initMap() {
+        // OSMDroid Konfiguration
+        val config = Configuration.getInstance()
+        config.userAgentValue = "GPSPredictiveTester/1.0"
+        val cacheDir = File(cacheDir, "osmdroid/tiles")
+        cacheDir.mkdirs()
+        config.osmdroidTileCache = cacheDir
+
+        // Map Setup
+        mapView.setTileSource(TileSourceFactory.MAPNIK)
+        mapView.setMultiTouchControls(true)
+        mapView.zoomController.setVisibility(CustomZoomButtonsController.Visibility.NEVER)
+
+        // Default Position (Schweiz)
+        mapView.controller.setZoom(15.0)
+        mapView.controller.setCenter(GeoPoint(47.1189, 8.5160))
+    }
+
+    private fun updateMap(currentLat: Double, currentLng: Double) {
+        mapView.overlays.clear()
+
+        val currentPos = GeoPoint(currentLat, currentLng)
+        val targetPos = GeoPoint(targetLat, targetLng)
+
+        // Route-Linie (direkte Verbindung)
+        routeLine = Polyline().apply {
+            addPoint(currentPos)
+            addPoint(targetPos)
+            outlinePaint.color = Color.parseColor("#3b82f6")
+            outlinePaint.strokeWidth = 6f
+        }
+        mapView.overlays.add(routeLine)
+
+        // Aktueller Standort (blau)
+        currentPosMarker = Marker(mapView).apply {
+            position = currentPos
+            setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+            title = "Du bist hier"
+            icon = resources.getDrawable(android.R.drawable.presence_online, null)
+        }
+        mapView.overlays.add(currentPosMarker)
+
+        // Ziel (rot)
+        targetMarker = Marker(mapView).apply {
+            position = targetPos
+            setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+            title = "Ziel"
+            icon = resources.getDrawable(android.R.drawable.ic_menu_myplaces, null)
+        }
+        mapView.overlays.add(targetMarker)
+
+        // Kamera so positionieren, dass beide Punkte sichtbar sind
+        val centerLat = (currentLat + targetLat) / 2
+        val centerLng = (currentLng + targetLng) / 2
+        mapView.controller.setCenter(GeoPoint(centerLat, centerLng))
+
+        // Zoom berechnen basierend auf Distanz
+        val results = FloatArray(1)
+        android.location.Location.distanceBetween(currentLat, currentLng, targetLat, targetLng, results)
+        val distance = results[0]
+        val zoom = when {
+            distance < 100 -> 18.0
+            distance < 300 -> 17.0
+            distance < 500 -> 16.0
+            distance < 1000 -> 15.0
+            distance < 2000 -> 14.0
+            else -> 13.0
+        }
+        mapView.controller.setZoom(zoom)
+
+        mapView.invalidate()
     }
 
     private fun setupListeners() {
@@ -137,6 +233,11 @@ class MainActivity : AppCompatActivity() {
             Toast.makeText(this, "Ungültige Koordinaten", Toast.LENGTH_SHORT).show()
             return
         }
+
+        // Ziel-Koordinaten speichern für Map
+        targetLat = lat
+        targetLng = lng
+        startDistanceValue = 0f
 
         // Akku-Level am Start messen
         val batteryManager = getSystemService(Context.BATTERY_SERVICE) as BatteryManager
@@ -197,6 +298,17 @@ class MainActivity : AppCompatActivity() {
             tvETA.text = Utils.formatDuration(state.etaSeconds)
         } else {
             tvETA.text = "\u221E"
+        }
+
+        // Start-Distanz (nur beim ersten Update setzen)
+        if (startDistanceValue == 0f && state.distanceToTarget > 0) {
+            startDistanceValue = state.distanceToTarget
+        }
+        tvStartDistance.text = Utils.formatDistance(startDistanceValue)
+
+        // Map aktualisieren
+        if (state.latitude != 0.0 && state.longitude != 0.0) {
+            updateMap(state.latitude, state.longitude)
         }
 
         // Mode farbe

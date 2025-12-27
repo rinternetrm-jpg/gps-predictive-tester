@@ -11,8 +11,8 @@ android {
         applicationId = "com.exitreminder.gpstester"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 4
+        versionName = "1.4.0"
     }
 
     buildTypes {
@@ -43,4 +43,7 @@ dependencies {
 
     // Google Play Services Location
     implementation("com.google.android.gms:play-services-location:21.1.0")
+
+    // OpenStreetMap mit osmdroid (kein API-Key nötig!)
+    implementation("org.osmdroid:osmdroid-android:6.1.18")
 }
