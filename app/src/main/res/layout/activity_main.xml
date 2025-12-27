@@ -113,6 +113,119 @@
                 android:background="@drawable/button_primary" />
         </LinearLayout>
 
+        <!-- Snap to Road Info -->
+        <LinearLayout
+            android:id="@+id/snapInfoSection"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="12dp"
+            android:layout_marginTop="8dp"
+            android:background="@drawable/card_background"
+            android:visibility="gone">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="SNAP TO ROAD"
+                android:textSize="10sp"
+                android:textStyle="bold"
+                android:textColor="#06b6d4"
+                android:letterSpacing="0.1" />
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:layout_marginTop="8dp">
+
+                <!-- Original (Hausmitte) -->
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="HAUSMITTE"
+                        android:textSize="9sp"
+                        android:textColor="#5c5c6c" />
+
+                    <TextView
+                        android:id="@+id/tvOriginalCoords"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="—"
+                        android:textSize="10sp"
+                        android:textColor="#9898a8"
+                        android:fontFamily="monospace" />
+                </LinearLayout>
+
+                <!-- Arrow -->
+                <TextView
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="->"
+                    android:textSize="14sp"
+                    android:textColor="#5c5c6c"
+                    android:layout_gravity="center"
+                    android:paddingHorizontal="8dp" />
+
+                <!-- Snapped (Strasse) -->
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="STRASSE"
+                        android:textSize="9sp"
+                        android:textColor="#5c5c6c" />
+
+                    <TextView
+                        android:id="@+id/tvSnappedCoords"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="—"
+                        android:textSize="10sp"
+                        android:textColor="#22c55e"
+                        android:fontFamily="monospace" />
+                </LinearLayout>
+            </LinearLayout>
+
+            <!-- Distance & Road Name -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:layout_marginTop="8dp">
+
+                <TextView
+                    android:id="@+id/tvRoadDistance"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="—"
+                    android:textSize="11sp"
+                    android:textColor="#f97316" />
+
+                <TextView
+                    android:id="@+id/tvRoadName"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:text="—"
+                    android:textSize="11sp"
+                    android:textColor="#3b82f6"
+                    android:gravity="end" />
+            </LinearLayout>
+        </LinearLayout>
+
         <!-- Trigger Radius -->
         <TextView
             android:layout_width="wrap_content"

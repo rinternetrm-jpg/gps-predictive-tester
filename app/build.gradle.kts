@@ -11,8 +11,8 @@ android {
         applicationId = "com.exitreminder.gpstester"
         minSdk = 26
         targetSdk = 34
-        versionCode = 5
-        versionName = "1.5.0"
+        versionCode = 6
+        versionName = "1.6.0"
     }
 
     buildTypes {
@@ -46,4 +46,7 @@ dependencies {
 
     // OpenStreetMap mit osmdroid (kein API-Key nötig!)
     implementation("org.osmdroid:osmdroid-android:6.1.18")
+
+    // Coroutines für async Snap to Road
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
 }

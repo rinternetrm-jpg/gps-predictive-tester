@@ -13,10 +13,15 @@ import android.os.IBinder
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.view.Gravity
+import android.view.View
 import android.widget.*
 import android.widget.ScrollView
 import android.widget.Switch
 import androidx.appcompat.app.AppCompatActivity
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import androidx.core.app.ActivityCompat
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
@@ -53,6 +58,11 @@ class MainActivity : AppCompatActivity() {
     private lateinit var tvWifiSSID: TextView
     private lateinit var tvHomeDistance: TextView
     private lateinit var switchWifiHybrid: Switch
+    private lateinit var snapInfoSection: LinearLayout
+    private lateinit var tvOriginalCoords: TextView
+    private lateinit var tvSnappedCoords: TextView
+    private lateinit var tvRoadDistance: TextView
+    private lateinit var tvRoadName: TextView
 
     private val logAdapter = LogAdapter()
 
@@ -111,6 +121,11 @@ class MainActivity : AppCompatActivity() {
         tvWifiSSID = findViewById(R.id.tvWifiSSID)
         tvHomeDistance = findViewById(R.id.tvHomeDistance)
         switchWifiHybrid = findViewById(R.id.switchWifiHybrid)
+        snapInfoSection = findViewById(R.id.snapInfoSection)
+        tvOriginalCoords = findViewById(R.id.tvOriginalCoords)
+        tvSnappedCoords = findViewById(R.id.tvSnappedCoords)
+        tvRoadDistance = findViewById(R.id.tvRoadDistance)
+        tvRoadName = findViewById(R.id.tvRoadName)
 
         rvLog.layoutManager = LinearLayoutManager(this)
         rvLog.adapter = logAdapter
@@ -218,21 +233,100 @@ class MainActivity : AppCompatActivity() {
         val address = etAddress.text.toString()
         if (address.isBlank()) return
 
-        try {
-            val geocoder = Geocoder(this, Locale.getDefault())
-            val results = geocoder.getFromLocationName(address, 1)
-            if (!results.isNullOrEmpty()) {
+        // Disable button während Suche
+        val btnSearch = findViewById<Button>(R.id.btnSearch)
+        btnSearch.isEnabled = false
+        btnSearch.text = "..."
+
+        CoroutineScope(Dispatchers.Main).launch {
+            try {
+                // 1. Geocoding (Hausmitte)
+                val geocoder = Geocoder(this@MainActivity, Locale.getDefault())
+                val results = withContext(Dispatchers.IO) {
+                    geocoder.getFromLocationName(address, 1)
+                }
+
+                if (results.isNullOrEmpty()) {
+                    Toast.makeText(this@MainActivity, "Adresse nicht gefunden", Toast.LENGTH_SHORT).show()
+                    snapInfoSection.visibility = View.GONE
+                    return@launch
+                }
+
                 val location = results[0]
-                etLat.setText(location.latitude.toString())
-                etLng.setText(location.longitude.toString())
-                Toast.makeText(this, "\uD83D\uDCCD ${location.getAddressLine(0)}", Toast.LENGTH_SHORT).show()
-            } else {
-                Toast.makeText(this, "Adresse nicht gefunden", Toast.LENGTH_SHORT).show()
+                val houseLat = location.latitude
+                val houseLng = location.longitude
+
+                // Zeige Snap Info Section
+                snapInfoSection.visibility = View.VISIBLE
+
+                // Zeige Hausmitte
+                tvOriginalCoords.text = "\uD83C\uDFE0 ${houseLat.format(6)}, ${houseLng.format(6)}"
+
+                // 2. Snap to Road (Straßenpunkt)
+                tvSnappedCoords.text = "Suche Straße..."
+                tvSnappedCoords.setTextColor(0xFF06b6d4.toInt())
+
+                val snapResult = RoadSnapService.snapToRoad(houseLat, houseLng)
+
+                if (snapResult != null && snapResult.distanceToRoad > 0.5f) {
+                    // Nutze Straßenpunkt als Trigger (nur wenn > 0.5m Unterschied)
+                    etLat.setText(snapResult.snappedLat.toString())
+                    etLng.setText(snapResult.snappedLng.toString())
+
+                    tvSnappedCoords.text = "\uD83D\uDEE3\uFE0F ${snapResult.snappedLat.format(6)}, ${snapResult.snappedLng.format(6)}"
+                    tvSnappedCoords.setTextColor(0xFF22c55e.toInt())
+                    tvRoadDistance.text = "\u2194\uFE0F ${snapResult.distanceToRoad.toInt()}m Korrektur"
+                    tvRoadName.text = snapResult.roadName ?: "Unbenannte Straße"
+
+                    // Log
+                    logAdapter.addEntry(LogEntry(
+                        timestamp = System.currentTimeMillis(),
+                        distance = snapResult.distanceToRoad,
+                        accuracy = 0f,
+                        speedKmh = 0f,
+                        category = SpeedCategory.STILL,
+                        mode = PrecisionMode.LOW_POWER,
+                        nextCheckSec = 0f,
+                        event = "\uD83D\uDEE3\uFE0F Snap to Road: ${snapResult.distanceToRoad.toInt()}m Korrektur"
+                    ))
+
+                    Toast.makeText(
+                        this@MainActivity,
+                        "\uD83D\uDCCD Straßenpunkt: ${snapResult.distanceToRoad.toInt()}m von Hausmitte",
+                        Toast.LENGTH_LONG
+                    ).show()
+
+                } else {
+                    // Kein Snap nötig oder Fehler - nutze Hausmitte
+                    etLat.setText(houseLat.toString())
+                    etLng.setText(houseLng.toString())
+
+                    if (snapResult != null && snapResult.distanceToRoad <= 0.5f) {
+                        tvSnappedCoords.text = "\u2705 Bereits auf Straße"
+                        tvSnappedCoords.setTextColor(0xFF22c55e.toInt())
+                        tvRoadDistance.text = "< 1m"
+                        tvRoadName.text = snapResult.roadName ?: "—"
+                    } else {
+                        tvSnappedCoords.text = "\u26A0\uFE0F Snap fehlgeschlagen"
+                        tvSnappedCoords.setTextColor(0xFFeab308.toInt())
+                        tvRoadDistance.text = "—"
+                        tvRoadName.text = "—"
+                    }
+
+                    Toast.makeText(this@MainActivity, "\uD83D\uDCCD ${location.getAddressLine(0)}", Toast.LENGTH_SHORT).show()
+                }
+
+            } catch (e: Exception) {
+                Toast.makeText(this@MainActivity, "Fehler: ${e.message}", Toast.LENGTH_SHORT).show()
+                snapInfoSection.visibility = View.GONE
+            } finally {
+                btnSearch.isEnabled = true
+                btnSearch.text = "S"
             }
-        } catch (e: Exception) {
-            Toast.makeText(this, "Fehler: ${e.message}", Toast.LENGTH_SHORT).show()
         }
     }
+
+    private fun Double.format(digits: Int) = "%.${digits}f".format(this)
 
     private fun startTracking() {
         val lat = etLat.text.toString().toDoubleOrNull()
@@ -632,8 +726,6 @@ class MainActivity : AppCompatActivity() {
             tvHomeDistance.text = "${home.latitude.format(4)}, ${home.longitude.format(4)}"
         }
     }
-
-    private fun Double.format(digits: Int) = "%.${digits}f".format(this)
 
     private fun onWifiTrigger() {
         // Vibration
