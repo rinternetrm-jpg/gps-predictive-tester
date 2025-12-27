@@ -31,6 +31,7 @@ import org.osmdroid.util.GeoPoint
 import org.osmdroid.views.CustomZoomButtonsController
 import org.osmdroid.views.MapView
 import org.osmdroid.views.overlay.Marker
+import org.osmdroid.views.overlay.Polygon
 import org.osmdroid.views.overlay.Polyline
 import java.io.File
 import java.util.*
@@ -42,6 +43,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var etAddress: EditText
     private lateinit var seekRadius: SeekBar
     private lateinit var tvRadius: TextView
+    private lateinit var seekTolerance: SeekBar
+    private lateinit var tvTolerance: TextView
     private lateinit var tvDistance: TextView
     private lateinit var tvAccuracy: TextView
     private lateinit var tvSpeed: TextView
@@ -58,6 +61,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var tvWifiSSID: TextView
     private lateinit var tvHomeDistance: TextView
     private lateinit var switchWifiHybrid: Switch
+    private lateinit var btnSetWifiHome: Button
+    private lateinit var directionSection: LinearLayout
+    private lateinit var tvDirectionStatus: TextView
+    private lateinit var tvHouseToSnapDist: TextView
     private lateinit var snapInfoSection: LinearLayout
     private lateinit var tvOriginalCoords: TextView
     private lateinit var tvSnappedCoords: TextView
@@ -69,10 +76,36 @@ class MainActivity : AppCompatActivity() {
     // Map Marker
     private var currentPosMarker: Marker? = null
     private var targetMarker: Marker? = null
+    private var houseMarker: Marker? = null
+    private var snapMarker: Marker? = null
+    private var houseToSnapLine: Polyline? = null
     private var routeLine: Polyline? = null
+    private var snapToleranceCircle: Polygon? = null
+    private var targetToleranceCircle: Polygon? = null
     private var targetLat: Double = 0.0
     private var targetLng: Double = 0.0
+
+    // WLAN Home Positionen für Karte
+    private var wifiHouseLat: Double = 0.0
+    private var wifiHouseLng: Double = 0.0
+    private var wifiSnapLat: Double = 0.0
+    private var wifiSnapLng: Double = 0.0
+
+    // Route-Daten
+    private var currentRoute: RoadSnapService.RouteResult? = null
+    private var routePolyline: Polyline? = null
+
+    // Trigger-Linie HOME (entlang der Straße)
+    private var triggerLine: Polyline? = null
+    private var triggerLineStart: Pair<Double, Double>? = null
+    private var triggerLineEnd: Pair<Double, Double>? = null
+
+    // Trigger-Linie ZIEL (entlang der Straße)
+    private var targetTriggerLine: Polyline? = null
+    private var targetTriggerLineStart: Pair<Double, Double>? = null
+    private var targetTriggerLineEnd: Pair<Double, Double>? = null
     private var startDistanceValue: Float = 0f
+    private var triggerTolerance: Float = 15f  // Default 15m Toleranz
     private var locationManager: PredictiveLocationManager? = null
     private var wifiManager: WifiLocationManager? = null
     private var service: ForegroundLocationService? = null
@@ -105,6 +138,8 @@ class MainActivity : AppCompatActivity() {
         etAddress = findViewById(R.id.etAddress)
         seekRadius = findViewById(R.id.seekRadius)
         tvRadius = findViewById(R.id.tvRadius)
+        seekTolerance = findViewById(R.id.seekTolerance)
+        tvTolerance = findViewById(R.id.tvTolerance)
         tvDistance = findViewById(R.id.tvDistance)
         tvAccuracy = findViewById(R.id.tvAccuracy)
         tvSpeed = findViewById(R.id.tvSpeed)
@@ -121,6 +156,10 @@ class MainActivity : AppCompatActivity() {
         tvWifiSSID = findViewById(R.id.tvWifiSSID)
         tvHomeDistance = findViewById(R.id.tvHomeDistance)
         switchWifiHybrid = findViewById(R.id.switchWifiHybrid)
+        btnSetWifiHome = findViewById(R.id.btnSetWifiHome)
+        directionSection = findViewById(R.id.directionSection)
+        tvDirectionStatus = findViewById(R.id.tvDirectionStatus)
+        tvHouseToSnapDist = findViewById(R.id.tvHouseToSnapDist)
         snapInfoSection = findViewById(R.id.snapInfoSection)
         tvOriginalCoords = findViewById(R.id.tvOriginalCoords)
         tvSnappedCoords = findViewById(R.id.tvSnappedCoords)
@@ -159,19 +198,54 @@ class MainActivity : AppCompatActivity() {
     private fun updateMap(currentLat: Double, currentLng: Double) {
         mapView.overlays.clear()
 
+        // WLAN Home Marker wieder hinzufügen (falls vorhanden)
+        triggerLine?.let { mapView.overlays.add(it) }  // Trigger-Linie zuerst (unter anderen)
+        snapToleranceCircle?.let { mapView.overlays.add(it) }
+        houseToSnapLine?.let { mapView.overlays.add(it) }
+        houseMarker?.let { mapView.overlays.add(it) }
+        snapMarker?.let { mapView.overlays.add(it) }
+
+        // Route-Linie wieder hinzufügen (falls vorhanden)
+        routePolyline?.let { mapView.overlays.add(it) }
+
         val currentPos = GeoPoint(currentLat, currentLng)
         val targetPos = GeoPoint(targetLat, targetLng)
 
-        // Route-Linie (direkte Verbindung)
-        routeLine = Polyline().apply {
-            addPoint(currentPos)
-            addPoint(targetPos)
-            outlinePaint.color = Color.parseColor("#3b82f6")
-            outlinePaint.strokeWidth = 6f
+        // Ziel-Trigger-LINIE (gelb) oder Kreis als Fallback
+        if (targetTriggerLineStart != null && targetTriggerLineEnd != null) {
+            targetTriggerLine = Polyline().apply {
+                addPoint(GeoPoint(targetTriggerLineStart!!.first, targetTriggerLineStart!!.second))
+                addPoint(GeoPoint(targetTriggerLineEnd!!.first, targetTriggerLineEnd!!.second))
+                outlinePaint.color = Color.parseColor("#eab308")  // Gelb
+                outlinePaint.strokeWidth = 12f
+                outlinePaint.strokeCap = android.graphics.Paint.Cap.ROUND
+            }
+            mapView.overlays.add(targetTriggerLine)
+        } else {
+            // Fallback: Kreis
+            val triggerRadius = if (::seekRadius.isInitialized) seekRadius.progress.toDouble() else 50.0
+            targetToleranceCircle = createCircle(
+                targetPos,
+                triggerRadius,
+                Color.parseColor("#40eab308"),  // Gelb, 25% transparent
+                Color.parseColor("#eab308")      // Gelb Rand
+            )
+            mapView.overlays.add(targetToleranceCircle)
         }
-        mapView.overlays.add(routeLine)
 
-        // Aktueller Standort (blau)
+        // Route-Linie nur zeichnen wenn keine echte Route vorhanden
+        if (routePolyline == null) {
+            routeLine = Polyline().apply {
+                addPoint(currentPos)
+                addPoint(targetPos)
+                outlinePaint.color = Color.parseColor("#9898a8")  // Grau = Luftlinie
+                outlinePaint.strokeWidth = 3f
+                outlinePaint.pathEffect = android.graphics.DashPathEffect(floatArrayOf(10f, 10f), 0f)
+            }
+            mapView.overlays.add(routeLine)
+        }
+
+        // Aktueller Standort (grün)
         currentPosMarker = Marker(mapView).apply {
             position = currentPos
             setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
@@ -211,10 +285,405 @@ class MainActivity : AppCompatActivity() {
         mapView.invalidate()
     }
 
+    /**
+     * Zeigt das Ziel auf der Karte und berechnet Route vom Home
+     */
+    private fun showTargetOnMap(lat: Double, lng: Double) {
+        android.util.Log.d("Route", "=== showTargetOnMap CALLED: target=$lat,$lng ===")
+        logAdapter.addEntry(LogEntry(
+            timestamp = System.currentTimeMillis(),
+            distance = 0f, accuracy = 0f, speedKmh = 0f,
+            category = SpeedCategory.STILL, mode = PrecisionMode.LOW_POWER, nextCheckSec = 0f,
+            event = "🎯 ZIEL GESUCHT: ${"%.5f".format(lat)}, ${"%.5f".format(lng)}"
+        ))
+
+        mapView.overlays.clear()
+
+        // WLAN Home Marker wieder hinzufügen (falls vorhanden)
+        triggerLine?.let { mapView.overlays.add(it) }  // Trigger-Linie zuerst (unter anderen)
+        snapToleranceCircle?.let { mapView.overlays.add(it) }
+        houseToSnapLine?.let { mapView.overlays.add(it) }
+        houseMarker?.let { mapView.overlays.add(it) }
+        snapMarker?.let { mapView.overlays.add(it) }
+
+        val targetPos = GeoPoint(lat, lng)
+
+        // Alte Ziel-Elemente entfernen
+        targetTriggerLine?.let { mapView.overlays.remove(it) }
+        targetToleranceCircle?.let { mapView.overlays.remove(it) }
+
+        // Ziel-Trigger-LINIE (gelb, entlang der Straße) statt Kreis
+        if (targetTriggerLineStart != null && targetTriggerLineEnd != null) {
+            targetTriggerLine = Polyline().apply {
+                addPoint(GeoPoint(targetTriggerLineStart!!.first, targetTriggerLineStart!!.second))
+                addPoint(GeoPoint(targetTriggerLineEnd!!.first, targetTriggerLineEnd!!.second))
+                outlinePaint.color = Color.parseColor("#eab308")  // Gelb
+                outlinePaint.strokeWidth = 12f  // Dick für Sichtbarkeit
+                outlinePaint.strokeCap = android.graphics.Paint.Cap.ROUND
+            }
+            mapView.overlays.add(targetTriggerLine)
+        } else {
+            // Fallback: Kreis wenn keine Linie verfügbar
+            val triggerRadius = if (::seekRadius.isInitialized) seekRadius.progress.toDouble() else 50.0
+            targetToleranceCircle = createCircle(
+                targetPos,
+                triggerRadius,
+                Color.parseColor("#40eab308"),  // Gelb, 25% transparent
+                Color.parseColor("#eab308")      // Gelb Rand
+            )
+            mapView.overlays.add(targetToleranceCircle)
+        }
+
+        // Ziel-Marker (rot)
+        targetMarker = Marker(mapView).apply {
+            position = targetPos
+            setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+            title = "🎯 Ziel"
+            icon = resources.getDrawable(android.R.drawable.ic_menu_myplaces, null).apply {
+                setTint(Color.parseColor("#ef4444"))  // Rot
+            }
+        }
+        mapView.overlays.add(targetMarker)
+
+        // Route vom Home (Snap-Punkt) zum Ziel berechnen
+        // Prüfe verschiedene Quellen für Home-Koordinaten
+        android.util.Log.d("Route", "showTargetOnMap: snapMarker=$snapMarker, wifiSnapLat=$wifiSnapLat")
+
+        val homeLat: Double
+        val homeLng: Double
+        val homeSource: String
+
+        when {
+            // 1. Priorität: snapMarker (Map Marker)
+            snapMarker != null && snapMarker!!.position != null -> {
+                homeLat = snapMarker!!.position.latitude
+                homeLng = snapMarker!!.position.longitude
+                homeSource = "snapMarker"
+            }
+            // 2. Priorität: Gespeicherte Snap-Koordinaten
+            wifiSnapLat != 0.0 && wifiSnapLng != 0.0 -> {
+                homeLat = wifiSnapLat
+                homeLng = wifiSnapLng
+                homeSource = "wifiSnap"
+            }
+            // 3. Priorität: houseMarker
+            houseMarker != null && houseMarker!!.position != null -> {
+                homeLat = houseMarker!!.position.latitude
+                homeLng = houseMarker!!.position.longitude
+                homeSource = "houseMarker"
+            }
+            // 4. Priorität: Gespeicherte Haus-Koordinaten
+            wifiHouseLat != 0.0 && wifiHouseLng != 0.0 -> {
+                homeLat = wifiHouseLat
+                homeLng = wifiHouseLng
+                homeSource = "wifiHouse"
+            }
+            else -> {
+                // Kein Home gefunden
+                android.util.Log.d("Route", "NO HOME - cannot calculate route!")
+                logAdapter.addEntry(LogEntry(
+                    timestamp = System.currentTimeMillis(),
+                    distance = 0f, accuracy = 0f, speedKmh = 0f,
+                    category = SpeedCategory.STILL, mode = PrecisionMode.LOW_POWER, nextCheckSec = 0f,
+                    event = "⚠️ KEIN STARTPUNKT! Starte erst Tracking mit WLAN."
+                ))
+                Toast.makeText(this, "⚠️ Kein Startpunkt - starte Tracking!", Toast.LENGTH_LONG).show()
+                mapView.controller.setCenter(targetPos)
+                mapView.controller.setZoom(17.0)
+                mapView.invalidate()
+                return
+            }
+        }
+
+        android.util.Log.d("Route", "Using $homeSource: $homeLat, $homeLng -> $lat, $lng")
+        logAdapter.addEntry(LogEntry(
+            timestamp = System.currentTimeMillis(),
+            distance = 0f, accuracy = 0f, speedKmh = 0f,
+            category = SpeedCategory.STILL, mode = PrecisionMode.LOW_POWER, nextCheckSec = 0f,
+            event = "📍 START=$homeSource: ${"%.4f".format(homeLat)},${"%.4f".format(homeLng)}"
+        ))
+
+        logAdapter.addEntry(LogEntry(
+            timestamp = System.currentTimeMillis(),
+            distance = 0f, accuracy = 0f, speedKmh = 0f,
+            category = SpeedCategory.STILL, mode = PrecisionMode.LOW_POWER, nextCheckSec = 0f,
+            event = "🚀 Starte Route-Berechnung..."
+        ))
+
+        // Route async berechnen
+        CoroutineScope(Dispatchers.Main).launch {
+            try {
+                calculateAndShowRoute(homeLat, homeLng, lat, lng)
+            } catch (e: Exception) {
+                android.util.Log.e("Route", "Route exception: ${e.message}", e)
+                logAdapter.addEntry(LogEntry(
+                    timestamp = System.currentTimeMillis(),
+                    distance = 0f, accuracy = 0f, speedKmh = 0f,
+                    category = SpeedCategory.STILL, mode = PrecisionMode.LOW_POWER, nextCheckSec = 0f,
+                    event = "❌ ROUTE EXCEPTION: ${e.message}"
+                ))
+            }
+        }
+
+        mapView.invalidate()
+    }
+
+    /**
+     * Berechnet Route entlang der Straßen und zeigt sie auf der Karte
+     */
+    private suspend fun calculateAndShowRoute(fromLat: Double, fromLng: Double, toLat: Double, toLng: Double) {
+        // Zeige die exakten Koordinaten
+        logAdapter.addEntry(LogEntry(
+            timestamp = System.currentTimeMillis(),
+            distance = 0f,
+            accuracy = 0f,
+            speedKmh = 0f,
+            category = SpeedCategory.STILL,
+            mode = PrecisionMode.LOW_POWER,
+            nextCheckSec = 0f,
+            event = "🗺️ Route: ${"%.5f".format(fromLat)},${"%.5f".format(fromLng)} → ${"%.5f".format(toLat)},${"%.5f".format(toLng)}"
+        ))
+
+        val route = RoadSnapService.getRoute(fromLat, fromLng, toLat, toLng)
+
+        if (route != null) {
+            currentRoute = route
+
+            // Alte Route entfernen
+            routePolyline?.let { mapView.overlays.remove(it) }
+
+            // Neue Route zeichnen (blau, entlang der Straßen)
+            routePolyline = Polyline().apply {
+                for (point in route.routePoints) {
+                    addPoint(GeoPoint(point.first, point.second))
+                }
+                outlinePaint.color = Color.parseColor("#3b82f6")  // Blau
+                outlinePaint.strokeWidth = 6f
+            }
+            mapView.overlays.add(routePolyline)
+
+            // Log mit Straßen-Distanz
+            val distanceKm = route.distanceMeters / 1000f
+            val durationMin = (route.durationSeconds / 60f).toInt()
+
+            logAdapter.addEntry(LogEntry(
+                timestamp = System.currentTimeMillis(),
+                distance = route.distanceMeters,
+                accuracy = 0f,
+                speedKmh = 0f,
+                category = SpeedCategory.STILL,
+                mode = PrecisionMode.LOW_POWER,
+                nextCheckSec = 0f,
+                event = "🛣️ Straßen-Route: ${route.distanceMeters.toInt()}m (~${durationMin} Min)"
+            ))
+
+            // Karte so zoomen, dass Route sichtbar ist
+            val minLat = minOf(fromLat, toLat)
+            val maxLat = maxOf(fromLat, toLat)
+            val minLng = minOf(fromLng, toLng)
+            val maxLng = maxOf(fromLng, toLng)
+            val centerLat = (minLat + maxLat) / 2
+            val centerLng = (minLng + maxLng) / 2
+
+            mapView.controller.setCenter(GeoPoint(centerLat, centerLng))
+
+            // Zoom basierend auf Distanz
+            val zoom = when {
+                route.distanceMeters < 200 -> 18.0
+                route.distanceMeters < 500 -> 17.0
+                route.distanceMeters < 1000 -> 16.0
+                route.distanceMeters < 2000 -> 15.0
+                route.distanceMeters < 5000 -> 14.0
+                else -> 13.0
+            }
+            mapView.controller.setZoom(zoom)
+
+            mapView.invalidate()
+
+            Toast.makeText(
+                this,
+                "🛣️ Straßen-Distanz: ${route.distanceMeters.toInt()}m",
+                Toast.LENGTH_SHORT
+            ).show()
+        } else {
+            // Zeige detaillierten Fehlergrund
+            val errorReason = RoadSnapService.lastRouteError ?: "Unbekannt"
+            logAdapter.addEntry(LogEntry(
+                timestamp = System.currentTimeMillis(),
+                distance = 0f,
+                accuracy = 0f,
+                speedKmh = 0f,
+                category = SpeedCategory.STILL,
+                mode = PrecisionMode.LOW_POWER,
+                nextCheckSec = 0f,
+                event = "⚠️ Route FEHLER: $errorReason"
+            ))
+
+            // Luftlinie berechnen und anzeigen
+            val results = FloatArray(1)
+            android.location.Location.distanceBetween(fromLat, fromLng, toLat, toLng, results)
+            val luftlinie = results[0].toInt()
+
+            logAdapter.addEntry(LogEntry(
+                timestamp = System.currentTimeMillis(),
+                distance = results[0],
+                accuracy = 0f,
+                speedKmh = 0f,
+                category = SpeedCategory.STILL,
+                mode = PrecisionMode.LOW_POWER,
+                nextCheckSec = 0f,
+                event = "📏 Fallback Luftlinie: ${luftlinie}m"
+            ))
+
+            Toast.makeText(
+                this,
+                "⚠️ Route: $errorReason - Luftlinie: ${luftlinie}m",
+                Toast.LENGTH_LONG
+            ).show()
+        }
+    }
+
+    /**
+     * Erstellt einen Kreis als Polygon für Toleranz-Zonen
+     */
+    private fun createCircle(center: GeoPoint, radiusMeters: Double, fillColor: Int, strokeColor: Int): Polygon {
+        val points = ArrayList<GeoPoint>()
+        val earthRadius = 6371000.0 // Meter
+
+        for (i in 0..360 step 10) {
+            val angle = Math.toRadians(i.toDouble())
+            val latOffset = (radiusMeters / earthRadius) * Math.cos(angle) * (180.0 / Math.PI)
+            val lngOffset = (radiusMeters / earthRadius) * Math.sin(angle) * (180.0 / Math.PI) / Math.cos(Math.toRadians(center.latitude))
+            points.add(GeoPoint(center.latitude + latOffset, center.longitude + lngOffset))
+        }
+
+        return Polygon().apply {
+            this.points = points
+            fillPaint.color = fillColor
+            outlinePaint.color = strokeColor
+            outlinePaint.strokeWidth = 3f
+        }
+    }
+
+    /**
+     * Zeigt Haus (GPS) und Snap-Punkt (Straße) auf der Karte
+     * Optional mit Trigger-Linie entlang der Straße
+     */
+    private fun updateMapWithWifiHome(
+        houseLat: Double, houseLng: Double,
+        snapLat: Double, snapLng: Double,
+        lineStart: Pair<Double, Double>? = null,
+        lineEnd: Pair<Double, Double>? = null
+    ) {
+        // WICHTIG: Speichere Koordinaten für Route-Berechnung!
+        wifiHouseLat = houseLat
+        wifiHouseLng = houseLng
+        wifiSnapLat = snapLat
+        wifiSnapLng = snapLng
+
+        android.util.Log.d("Route", "HOME SAVED: house=$houseLat,$houseLng snap=$snapLat,$snapLng")
+
+        // Entferne alte WLAN-Marker
+        houseMarker?.let { mapView.overlays.remove(it) }
+        snapMarker?.let { mapView.overlays.remove(it) }
+        houseToSnapLine?.let { mapView.overlays.remove(it) }
+        snapToleranceCircle?.let { mapView.overlays.remove(it) }
+        triggerLine?.let { mapView.overlays.remove(it) }
+
+        val housePos = GeoPoint(houseLat, houseLng)
+        val snapPos = GeoPoint(snapLat, snapLng)
+
+        // Speichere Trigger-Linie für späteren Zugriff
+        triggerLineStart = lineStart
+        triggerLineEnd = lineEnd
+
+        // NEUE Trigger-LINIE entlang der Straße (statt Kreis)
+        if (lineStart != null && lineEnd != null) {
+            triggerLine = Polyline().apply {
+                addPoint(GeoPoint(lineStart.first, lineStart.second))
+                addPoint(GeoPoint(lineEnd.first, lineEnd.second))
+                outlinePaint.color = Color.parseColor("#22c55e")  // Grün
+                outlinePaint.strokeWidth = 12f  // Dick für Sichtbarkeit
+                outlinePaint.strokeCap = android.graphics.Paint.Cap.ROUND
+            }
+            mapView.overlays.add(triggerLine)
+
+            logAdapter.addEntry(LogEntry(
+                timestamp = System.currentTimeMillis(),
+                distance = 0f,
+                accuracy = 0f,
+                speedKmh = 0f,
+                category = SpeedCategory.STILL,
+                mode = PrecisionMode.LOW_POWER,
+                nextCheckSec = 0f,
+                event = "🛣️ Trigger-Linie: ±${RoadSnapService.TRIGGER_LINE_HALF_LENGTH.toInt()}m entlang Straße"
+            ))
+        } else {
+            // Fallback: Alter Kreis wenn keine Linie verfügbar
+            snapToleranceCircle = createCircle(
+                snapPos,
+                triggerTolerance.toDouble(),
+                Color.parseColor("#40f97316"),
+                Color.parseColor("#f97316")
+            )
+            mapView.overlays.add(snapToleranceCircle)
+        }
+
+        // Linie vom Haus zur Straße (orange gestrichelt)
+        houseToSnapLine = Polyline().apply {
+            addPoint(housePos)
+            addPoint(snapPos)
+            outlinePaint.color = Color.parseColor("#f97316")  // Orange
+            outlinePaint.strokeWidth = 4f
+            outlinePaint.pathEffect = android.graphics.DashPathEffect(floatArrayOf(10f, 10f), 0f)
+        }
+        mapView.overlays.add(houseToSnapLine)
+
+        // Haus-Marker (blau) - GPS Position
+        houseMarker = Marker(mapView).apply {
+            position = housePos
+            setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+            title = "🏠 Haus (GPS)"
+            icon = resources.getDrawable(android.R.drawable.ic_menu_myplaces, null).apply {
+                setTint(Color.parseColor("#3b82f6"))  // Blau
+            }
+        }
+        mapView.overlays.add(houseMarker)
+
+        // Snap-Marker (grün) - Straßenpunkt = Trigger-Zone Mitte
+        snapMarker = Marker(mapView).apply {
+            position = snapPos
+            setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+            title = "🛣️ Trigger-Zone Mitte"
+            icon = resources.getDrawable(android.R.drawable.ic_menu_compass, null).apply {
+                setTint(Color.parseColor("#22c55e"))  // Grün
+            }
+        }
+        mapView.overlays.add(snapMarker)
+
+        // Karte auf Snap-Punkt zentrieren
+        mapView.controller.setCenter(snapPos)
+        mapView.controller.setZoom(18.0)
+
+        mapView.invalidate()
+    }
+
     private fun setupListeners() {
         seekRadius.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
                 tvRadius.text = "${progress}m"
+            }
+            override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+            override fun onStopTrackingTouch(seekBar: SeekBar?) {}
+        })
+
+        // Toleranz Slider
+        seekTolerance.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
+                triggerTolerance = progress.toFloat()
+                tvTolerance.text = "\u00B1${progress}m"
+                // Sync mit WLAN Manager
+                WifiLocationManager.TRIGGER_TOLERANCE = triggerTolerance
             }
             override fun onStartTrackingTouch(seekBar: SeekBar?) {}
             override fun onStopTrackingTouch(seekBar: SeekBar?) {}
@@ -226,6 +695,21 @@ class MainActivity : AppCompatActivity() {
 
         btnStart.setOnClickListener { startTracking() }
         btnStop.setOnClickListener { stopTracking() }
+
+        btnSetWifiHome.setOnClickListener {
+            setWifiHomeManually()
+        }
+    }
+
+    private fun setWifiHomeManually() {
+        // Aktuelle Position als Home-Location setzen
+        if (wifiManager != null) {
+            wifiManager?.setHomeLocationManually()
+            Toast.makeText(this, "\uD83C\uDFE0 Aktueller Standort als Home gespeichert!", Toast.LENGTH_SHORT).show()
+        } else {
+            // Wenn kein Tracking aktiv, hole kurz GPS und speichere
+            Toast.makeText(this, "\u26A0\uFE0F Tracking muss aktiv sein", Toast.LENGTH_SHORT).show()
+        }
     }
 
     @Suppress("DEPRECATION")
@@ -248,6 +732,12 @@ class MainActivity : AppCompatActivity() {
 
                 if (results.isNullOrEmpty()) {
                     Toast.makeText(this@MainActivity, "Adresse nicht gefunden", Toast.LENGTH_SHORT).show()
+                    logAdapter.addEntry(LogEntry(
+                        timestamp = System.currentTimeMillis(),
+                        distance = 0f, accuracy = 0f, speedKmh = 0f,
+                        category = SpeedCategory.STILL, mode = PrecisionMode.LOW_POWER, nextCheckSec = 0f,
+                        event = "❌ Geocoding: '$address' nicht gefunden!"
+                    ))
                     snapInfoSection.visibility = View.GONE
                     return@launch
                 }
@@ -255,6 +745,16 @@ class MainActivity : AppCompatActivity() {
                 val location = results[0]
                 val houseLat = location.latitude
                 val houseLng = location.longitude
+                val foundAddress = location.getAddressLine(0) ?: "?"
+                val city = location.locality ?: location.subAdminArea ?: "?"
+
+                // Log gefundene Adresse
+                logAdapter.addEntry(LogEntry(
+                    timestamp = System.currentTimeMillis(),
+                    distance = 0f, accuracy = 0f, speedKmh = 0f,
+                    category = SpeedCategory.STILL, mode = PrecisionMode.LOW_POWER, nextCheckSec = 0f,
+                    event = "🔍 Gefunden: $city - ${"%.4f".format(houseLat)},${"%.4f".format(houseLng)}"
+                ))
 
                 // Zeige Snap Info Section
                 snapInfoSection.visibility = View.VISIBLE
@@ -273,6 +773,10 @@ class MainActivity : AppCompatActivity() {
                     etLat.setText(snapResult.snappedLat.toString())
                     etLng.setText(snapResult.snappedLng.toString())
 
+                    // Aktualisiere Ziel-Koordinaten für Karte
+                    targetLat = snapResult.snappedLat
+                    targetLng = snapResult.snappedLng
+
                     tvSnappedCoords.text = "\uD83D\uDEE3\uFE0F ${snapResult.snappedLat.format(6)}, ${snapResult.snappedLng.format(6)}"
                     tvSnappedCoords.setTextColor(0xFF22c55e.toInt())
                     tvRoadDistance.text = "\u2194\uFE0F ${snapResult.distanceToRoad.toInt()}m Korrektur"
@@ -290,6 +794,21 @@ class MainActivity : AppCompatActivity() {
                         event = "\uD83D\uDEE3\uFE0F Snap to Road: ${snapResult.distanceToRoad.toInt()}m Korrektur"
                     ))
 
+                    // Setze beide Punkte für Direction Detection (WLAN Hybrid)
+                    wifiManager?.setHomeLocations(
+                        houseLat = houseLat,
+                        houseLng = houseLng,
+                        snapLat = snapResult.snappedLat,
+                        snapLng = snapResult.snappedLng
+                    )
+
+                    // Speichere Ziel-Trigger-Linie
+                    targetTriggerLineStart = snapResult.triggerLineStart
+                    targetTriggerLineEnd = snapResult.triggerLineEnd
+
+                    // Zeige Ziel auf Karte (mit Trigger-Linie)
+                    showTargetOnMap(snapResult.snappedLat, snapResult.snappedLng)
+
                     Toast.makeText(
                         this@MainActivity,
                         "\uD83D\uDCCD Straßenpunkt: ${snapResult.distanceToRoad.toInt()}m von Hausmitte",
@@ -300,6 +819,17 @@ class MainActivity : AppCompatActivity() {
                     // Kein Snap nötig oder Fehler - nutze Hausmitte
                     etLat.setText(houseLat.toString())
                     etLng.setText(houseLng.toString())
+
+                    // Aktualisiere Ziel-Koordinaten für Karte
+                    targetLat = houseLat
+                    targetLng = houseLng
+
+                    // Keine Trigger-Linie wenn bereits auf Straße oder Fehler
+                    targetTriggerLineStart = null
+                    targetTriggerLineEnd = null
+
+                    // Zeige Ziel auf Karte
+                    showTargetOnMap(houseLat, houseLng)
 
                     if (snapResult != null && snapResult.distanceToRoad <= 0.5f) {
                         tvSnappedCoords.text = "\u2705 Bereits auf Straße"
@@ -706,6 +1236,13 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun updateWifiUI(state: WifiState) {
+        // Debug: Was kommt an?
+        android.util.Log.d("WifiUI", "updateWifiUI called:")
+        android.util.Log.d("WifiUI", "  status=${state.status}")
+        android.util.Log.d("WifiUI", "  homeLocation=${state.homeLocation?.latitude}, ${state.homeLocation?.longitude}")
+        android.util.Log.d("WifiUI", "  snapLocation=${state.snapLocation?.latitude}, ${state.snapLocation?.longitude}")
+        android.util.Log.d("WifiUI", "  houseToSnapDistance=${state.houseToSnapDistance}")
+
         tvWifiStatus.text = "${state.status.emoji} ${state.status.label}"
         tvWifiSSID.text = state.ssid ?: "—"
 
@@ -721,9 +1258,79 @@ class MainActivity : AppCompatActivity() {
         }
         tvWifiStatus.setTextColor(statusColor)
 
-        // Home Location anzeigen
-        state.homeLocation?.let { home ->
-            tvHomeDistance.text = "${home.latitude.format(4)}, ${home.longitude.format(4)}"
+        // Home Location anzeigen - bevorzuge Snap-Point wenn vorhanden
+        if (state.snapLocation != null) {
+            // Snap-Point vorhanden = Direction Detection aktiv
+            tvHomeDistance.text = "\uD83D\uDEE3\uFE0F ${state.snapLocation.latitude.format(4)}, ${state.snapLocation.longitude.format(4)}"
+            tvHomeDistance.setTextColor(0xFF22c55e.toInt())  // Grün
+
+            // Debug im Event Log - nur bei CONNECTED Status
+            if (state.status == WifiStatus.CONNECTED) {
+                logAdapter.addEntry(LogEntry(
+                    timestamp = System.currentTimeMillis(),
+                    distance = state.houseToSnapDistance,
+                    accuracy = 0f,
+                    speedKmh = 0f,
+                    category = SpeedCategory.STILL,
+                    mode = PrecisionMode.LOW_POWER,
+                    nextCheckSec = 0f,
+                    event = "✅ UI FINAL: Snap=${state.snapLocation.latitude.format(4)}, Dist=${state.houseToSnapDistance.toInt()}m"
+                ))
+
+                // Karte mit Haus, Snap-Punkt und Trigger-Linie aktualisieren
+                if (state.homeLocation != null) {
+                    updateMapWithWifiHome(
+                        houseLat = state.homeLocation.latitude,
+                        houseLng = state.homeLocation.longitude,
+                        snapLat = state.snapLocation.latitude,
+                        snapLng = state.snapLocation.longitude,
+                        lineStart = state.triggerLineStart,
+                        lineEnd = state.triggerLineEnd
+                    )
+                }
+            }
+        } else if (state.homeLocation != null) {
+            // Nur GPS-Position (kein Snap)
+            tvHomeDistance.text = "\uD83D\uDCCD ${state.homeLocation.latitude.format(4)}, ${state.homeLocation.longitude.format(4)}"
+            tvHomeDistance.setTextColor(0xFF3b82f6.toInt())  // Blau
+
+            // Debug im Event Log - nur bei CONNECTED Status (nicht während VERIFYING)
+            if (state.status == WifiStatus.CONNECTED) {
+                logAdapter.addEntry(LogEntry(
+                    timestamp = System.currentTimeMillis(),
+                    distance = 0f,
+                    accuracy = 0f,
+                    speedKmh = 0f,
+                    category = SpeedCategory.STILL,
+                    mode = PrecisionMode.LOW_POWER,
+                    nextCheckSec = 0f,
+                    event = "⚠️ UI FINAL: Nur GPS, kein Snap!"
+                ))
+            }
+        } else {
+            tvHomeDistance.text = "—"
+            tvHomeDistance.setTextColor(0xFF9898a8.toInt())  // Grau
+        }
+
+        // Direction Detection anzeigen
+        if (state.houseToSnapDistance > 0) {
+            directionSection.visibility = View.VISIBLE
+            tvHouseToSnapDist.text = "${state.houseToSnapDistance.toInt()}m"
+
+            state.isOnStreetSide?.let { onStreet ->
+                if (onStreet) {
+                    tvDirectionStatus.text = "\uD83D\uDEE3\uFE0F Straßenseite"
+                    tvDirectionStatus.setTextColor(0xFFf97316.toInt())  // Orange
+                } else {
+                    tvDirectionStatus.text = "\uD83C\uDFE0 Hausseite/Garten"
+                    tvDirectionStatus.setTextColor(0xFF22c55e.toInt())  // Grün
+                }
+            } ?: run {
+                tvDirectionStatus.text = "\u2705 Snap OK"
+                tvDirectionStatus.setTextColor(0xFF22c55e.toInt())  // Grün
+            }
+        } else {
+            directionSection.visibility = View.GONE
         }
     }
 

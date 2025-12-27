@@ -11,8 +11,8 @@ android {
         applicationId = "com.exitreminder.gpstester"
         minSdk = 26
         targetSdk = 34
-        versionCode = 7
-        versionName = "1.6.1"
+        versionCode = 31
+        versionName = "3.2.4"
     }
 
     buildTypes {

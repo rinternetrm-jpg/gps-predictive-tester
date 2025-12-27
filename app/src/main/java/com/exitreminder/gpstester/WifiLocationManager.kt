@@ -12,6 +12,9 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import com.google.android.gms.location.*
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 
 class WifiLocationManager(
     private val context: Context,
@@ -33,6 +36,10 @@ class WifiLocationManager(
         // Movement Tracking
         const val MOVEMENT_CHECK_INTERVAL = 15_000L  // Alle 15 Sek
         const val MOVEMENT_CHECKS_NEEDED = 3         // 3x checken bevor Trigger
+
+        // Trigger Toleranz - kann von außen gesetzt werden
+        @JvmStatic
+        var TRIGGER_TOLERANCE: Float = 15f  // Default 15m
     }
 
     private val fusedClient = LocationServices.getFusedLocationProviderClient(context)
@@ -45,6 +52,16 @@ class WifiLocationManager(
     private var homeWifiSSID: String? = null
     private var isWifiConnected = false
     private var disconnectTime: Long? = null
+
+    // Direction Detection - NEU
+    private var houseCenter: Location? = null      // Gebäudemitte (von Geocoding)
+    private var snapPoint: Location? = null        // Straßenpunkt (von Snap to Road)
+    private var houseToSnapDistance: Float = 0f    // Distanz Haus → Straße
+    private var currentIsOnStreetSide: Boolean? = null
+
+    // Trigger-Linie entlang der Straße (statt Kreis)
+    private var triggerLineStart: Pair<Double, Double>? = null
+    private var triggerLineEnd: Pair<Double, Double>? = null
 
     // Movement tracking
     private var movementCheckCount = 0
@@ -86,6 +103,71 @@ class WifiLocationManager(
         Log.d(TAG, "WLAN monitoring stopped")
     }
 
+    /**
+     * Manuell aktuelle Position als Home setzen (über Button)
+     * Ruft automatisch Snap-to-Road auf für Direction Detection
+     */
+    fun setHomeLocationManually() {
+        Log.d(TAG, "Manually setting home location with Snap-to-Road...")
+
+        onLogEntry(LogEntry(
+            timestamp = System.currentTimeMillis(),
+            distance = 0f,
+            accuracy = 0f,
+            speedKmh = 0f,
+            category = SpeedCategory.STILL,
+            mode = PrecisionMode.LOW_POWER,
+            nextCheckSec = 0f,
+            event = "\uD83D\uDCCD Manuell: Hole GPS + Snap-to-Road..."
+        ))
+
+        // saveHomeLocation() macht jetzt GPS + Snap-to-Road
+        saveHomeLocation()
+    }
+
+    /**
+     * Setze beide Punkte für Direction Detection
+     * @param houseLat Gebäudemitte Latitude (von Geocoding)
+     * @param houseLng Gebäudemitte Longitude
+     * @param snapLat Straßenpunkt Latitude (von Snap to Road)
+     * @param snapLng Straßenpunkt Longitude
+     */
+    fun setHomeLocations(houseLat: Double, houseLng: Double, snapLat: Double, snapLng: Double) {
+        houseCenter = Location("geocoding").apply {
+            latitude = houseLat
+            longitude = houseLng
+        }
+
+        snapPoint = Location("snap").apply {
+            latitude = snapLat
+            longitude = snapLng
+        }
+
+        // Berechne Distanz Haus → Snap
+        houseToSnapDistance = houseCenter!!.distanceTo(snapPoint!!)
+
+        // Setze auch homeLocation für Fallback
+        homeLocation = snapPoint
+
+        Log.d(TAG, "Home locations set:")
+        Log.d(TAG, "  House: $houseLat, $houseLng")
+        Log.d(TAG, "  Snap:  $snapLat, $snapLng")
+        Log.d(TAG, "  Distance: ${houseToSnapDistance}m")
+
+        onLogEntry(LogEntry(
+            timestamp = System.currentTimeMillis(),
+            distance = houseToSnapDistance,
+            accuracy = 0f,
+            speedKmh = 0f,
+            category = SpeedCategory.STILL,
+            mode = PrecisionMode.LOW_POWER,
+            nextCheckSec = 0f,
+            event = "\uD83C\uDFE0\u27A1\uFE0F\uD83D\uDEE3\uFE0F Direction Detection: ${houseToSnapDistance.toInt()}m Haus→Straße"
+        ))
+
+        updateState(WifiStatus.CONNECTED)
+    }
+
     @SuppressLint("MissingPermission")
     private fun checkCurrentWifiState() {
         val connectivityManager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
@@ -100,10 +182,14 @@ class WifiLocationManager(
 
             Log.d(TAG, "Currently connected to: $homeWifiSSID")
 
-            // Speichere Home Location
-            saveHomeLocation()
-
-            updateState(WifiStatus.CONNECTED)
+            // Speichere Home Location nur wenn noch keine gesetzt
+            if (homeLocation == null) {
+                // saveHomeLocation() ruft selbst updateState() auf wenn fertig!
+                saveHomeLocation()
+            } else {
+                // Nur updaten wenn schon eine Home-Position existiert
+                updateState(WifiStatus.CONNECTED)
+            }
         } else {
             updateState(WifiStatus.DISCONNECTED)
         }
@@ -148,6 +234,7 @@ class WifiLocationManager(
         isWifiConnected = true
         disconnectTime = null
         isTrackingMovement = false
+        currentIsOnStreetSide = null
         handler.removeCallbacksAndMessages(null)
 
         val wifiInfo = wifiManager.connectionInfo
@@ -166,13 +253,16 @@ class WifiLocationManager(
             event = "\uD83D\uDCF6 WLAN verbunden: $ssid"
         ))
 
-        // Wenn neues WLAN oder erstes Mal
-        if (homeWifiSSID == null || homeWifiSSID != ssid) {
+        // Wenn neues WLAN oder erstes Mal (und keine Direction Detection aktiv)
+        if ((homeWifiSSID == null || homeWifiSSID != ssid) && houseCenter == null) {
             homeWifiSSID = ssid
+            // saveHomeLocation() ruft selbst updateState() auf wenn Snap-to-Road fertig!
             saveHomeLocation()
+        } else {
+            homeWifiSSID = ssid
+            // Nur updaten wenn NICHT gerade saveHomeLocation() läuft
+            updateState(WifiStatus.CONNECTED)
         }
-
-        updateState(WifiStatus.CONNECTED)
     }
 
     private fun onWifiDisconnected() {
@@ -209,7 +299,7 @@ class WifiLocationManager(
 
     @SuppressLint("MissingPermission")
     private fun saveHomeLocation() {
-        Log.d(TAG, "Saving home location...")
+        Log.d(TAG, "Saving home location with Snap-to-Road...")
 
         val request = LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 1000)
             .setMaxUpdates(1)
@@ -219,9 +309,10 @@ class WifiLocationManager(
         fusedClient.requestLocationUpdates(request, object : LocationCallback() {
             override fun onLocationResult(result: LocationResult) {
                 result.lastLocation?.let { location ->
+                    // GPS-Position als Hausmitte speichern
                     homeLocation = location
 
-                    Log.d(TAG, "Home location saved: ${location.latitude}, ${location.longitude} (±${location.accuracy}m)")
+                    Log.d(TAG, "GPS position: ${location.latitude}, ${location.longitude} (±${location.accuracy}m)")
 
                     onLogEntry(LogEntry(
                         timestamp = System.currentTimeMillis(),
@@ -231,10 +322,156 @@ class WifiLocationManager(
                         category = SpeedCategory.STILL,
                         mode = PrecisionMode.LOW_POWER,
                         nextCheckSec = 0f,
-                        event = "\uD83C\uDFE0 Home Position gespeichert (\u00B1${location.accuracy.toInt()}m)"
+                        event = "\uD83D\uDCCD GPS Position (\u00B1${location.accuracy.toInt()}m) - Suche Straße..."
                     ))
 
-                    updateState(WifiStatus.CONNECTED)
+                    // Zeige Zwischen-Status während Snap läuft
+                    updateState(WifiStatus.VERIFYING)
+
+                    // Log für UI
+                    onLogEntry(LogEntry(
+                        timestamp = System.currentTimeMillis(),
+                        distance = 0f,
+                        accuracy = location.accuracy,
+                        speedKmh = 0f,
+                        category = SpeedCategory.STILL,
+                        mode = PrecisionMode.LOW_POWER,
+                        nextCheckSec = 0f,
+                        event = "🌐 Starte OSRM API-Aufruf..."
+                    ))
+
+                    // Snap-to-Road aufrufen für Direction Detection
+                    CoroutineScope(Dispatchers.Main).launch {
+                        Log.d(TAG, "Calling Snap-to-Road API for ${location.latitude}, ${location.longitude}...")
+
+                        onLogEntry(LogEntry(
+                            timestamp = System.currentTimeMillis(),
+                            distance = 0f,
+                            accuracy = location.accuracy,
+                            speedKmh = 0f,
+                            category = SpeedCategory.STILL,
+                            mode = PrecisionMode.LOW_POWER,
+                            nextCheckSec = 0f,
+                            event = "⏳ Coroutine gestartet, rufe API..."
+                        ))
+
+                        try {
+                            val snapResult = RoadSnapService.snapToRoad(location.latitude, location.longitude)
+
+                            onLogEntry(LogEntry(
+                                timestamp = System.currentTimeMillis(),
+                                distance = 0f,
+                                accuracy = location.accuracy,
+                                speedKmh = 0f,
+                                category = SpeedCategory.STILL,
+                                mode = PrecisionMode.LOW_POWER,
+                                nextCheckSec = 0f,
+                                event = "📡 API Antwort: ${if (snapResult != null) "OK ${snapResult.distanceToRoad}m" else "NULL!"}"
+                            ))
+
+                            Log.d(TAG, "Snap-to-Road result: $snapResult")
+
+                            if (snapResult != null) {
+                                Log.d(TAG, "Snap distance: ${snapResult.distanceToRoad}m")
+
+                                // Setze beide Punkte für Direction Detection (auch bei kleiner Distanz!)
+                                houseCenter = Location("gps").apply {
+                                    latitude = location.latitude
+                                    longitude = location.longitude
+                                }
+
+                                snapPoint = Location("snap").apply {
+                                    latitude = snapResult.snappedLat
+                                    longitude = snapResult.snappedLng
+                                }
+
+                                houseToSnapDistance = snapResult.distanceToRoad
+
+                                // Speichere Trigger-Linie (entlang der Straße)
+                                triggerLineStart = snapResult.triggerLineStart
+                                triggerLineEnd = snapResult.triggerLineEnd
+
+                                Log.d(TAG, "Snap-to-Road SUCCESS:")
+                                Log.d(TAG, "  House: ${location.latitude}, ${location.longitude}")
+                                Log.d(TAG, "  Snap:  ${snapResult.snappedLat}, ${snapResult.snappedLng}")
+                                Log.d(TAG, "  Distance: ${houseToSnapDistance}m")
+                                Log.d(TAG, "  Road: ${snapResult.roadName}")
+                                Log.d(TAG, "  TriggerLine: ${triggerLineStart} -> ${triggerLineEnd}")
+
+                                val roadInfo = if (snapResult.roadName != null) " (${snapResult.roadName})" else ""
+                                val snapLatStr = "%.5f".format(snapResult.snappedLat)
+                                val snapLngStr = "%.5f".format(snapResult.snappedLng)
+
+                                onLogEntry(LogEntry(
+                                    timestamp = System.currentTimeMillis(),
+                                    distance = houseToSnapDistance,
+                                    accuracy = location.accuracy,
+                                    speedKmh = 0f,
+                                    category = SpeedCategory.STILL,
+                                    mode = PrecisionMode.LOW_POWER,
+                                    nextCheckSec = 0f,
+                                    event = "\uD83D\uDEE3\uFE0F SNAP: $snapLatStr, $snapLngStr$roadInfo"
+                                ))
+
+                                onLogEntry(LogEntry(
+                                    timestamp = System.currentTimeMillis(),
+                                    distance = houseToSnapDistance,
+                                    accuracy = location.accuracy,
+                                    speedKmh = 0f,
+                                    category = SpeedCategory.STILL,
+                                    mode = PrecisionMode.LOW_POWER,
+                                    nextCheckSec = 0f,
+                                    event = "\u2705 Direction Detection: ${houseToSnapDistance.toInt()}m Haus\u2192Straße"
+                                ))
+                            } else {
+                                // Snap fehlgeschlagen - nur GPS verwenden
+                                Log.e(TAG, "Snap-to-Road FAILED - API returned null")
+
+                                onLogEntry(LogEntry(
+                                    timestamp = System.currentTimeMillis(),
+                                    distance = 0f,
+                                    accuracy = location.accuracy,
+                                    speedKmh = 0f,
+                                    category = SpeedCategory.STILL,
+                                    mode = PrecisionMode.LOW_POWER,
+                                    nextCheckSec = 0f,
+                                    event = "\u274C Snap-to-Road FEHLER! Nur GPS."
+                                ))
+                            }
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Snap-to-Road EXCEPTION: ${e.message}", e)
+
+                            onLogEntry(LogEntry(
+                                timestamp = System.currentTimeMillis(),
+                                distance = 0f,
+                                accuracy = location.accuracy,
+                                speedKmh = 0f,
+                                category = SpeedCategory.STILL,
+                                mode = PrecisionMode.LOW_POWER,
+                                nextCheckSec = 0f,
+                                event = "\u274C Snap Exception: ${e.message}"
+                            ))
+                        }
+
+                        // WICHTIG: Jetzt erst updateState() aufrufen, wenn Snap fertig!
+                        Log.d(TAG, "Snap complete - updating state. snapPoint=${snapPoint?.latitude}, ${snapPoint?.longitude}")
+
+                        // Log für UI - zeige finalen Status
+                        if (snapPoint != null) {
+                            onLogEntry(LogEntry(
+                                timestamp = System.currentTimeMillis(),
+                                distance = houseToSnapDistance,
+                                accuracy = 0f,
+                                speedKmh = 0f,
+                                category = SpeedCategory.STILL,
+                                mode = PrecisionMode.LOW_POWER,
+                                nextCheckSec = 0f,
+                                event = "📍 HOME GESETZT: Snap=${snapPoint?.latitude?.let { "%.4f".format(it) }}, ${snapPoint?.longitude?.let { "%.4f".format(it) }}"
+                            ))
+                        }
+
+                        updateState(WifiStatus.CONNECTED)
+                    }
                 }
                 fusedClient.removeLocationUpdates(this)
             }
@@ -274,6 +511,161 @@ class WifiLocationManager(
     }
 
     private fun evaluateLocation(currentLocation: Location) {
+        val house = houseCenter
+        val snap = snapPoint
+
+        // Direction Detection aktiv?
+        if (house != null && snap != null) {
+            evaluateWithDirectionDetection(currentLocation, house, snap)
+        } else {
+            // Fallback: Einfache Distanz-Prüfung
+            evaluateSimpleDistance(currentLocation)
+        }
+    }
+
+    /**
+     * Erweiterte Evaluation mit Direction Detection
+     * Nutzt jetzt Trigger-LINIE statt Kreis für präzisere Erkennung
+     */
+    private fun evaluateWithDirectionDetection(currentLocation: Location, house: Location, snap: Location) {
+        val distanceFromHouse = currentLocation.distanceTo(house)
+        val distanceFromSnap = currentLocation.distanceTo(snap)
+
+        // Berechne Distanz zur Trigger-LINIE (wenn vorhanden)
+        val distanceToTriggerLine = if (triggerLineStart != null && triggerLineEnd != null) {
+            RoadSnapService.distanceToLineSegment(
+                currentLocation.latitude, currentLocation.longitude,
+                triggerLineStart!!.first, triggerLineStart!!.second,
+                triggerLineEnd!!.first, triggerLineEnd!!.second
+            )
+        } else {
+            distanceFromSnap  // Fallback auf Punkt-Distanz
+        }
+
+        // Ist User auf der Straßenseite? (weiter vom Haus als der Snap Point)
+        val isOnStreetSide = distanceFromHouse > (houseToSnapDistance - 5f)  // 5m Toleranz
+        currentIsOnStreetSide = isOnStreetSide
+
+        Log.d(TAG, "Direction check:")
+        Log.d(TAG, "  Distance from house: ${distanceFromHouse}m")
+        Log.d(TAG, "  Distance from snap: ${distanceFromSnap}m")
+        Log.d(TAG, "  Distance to trigger LINE: ${distanceToTriggerLine}m")
+        Log.d(TAG, "  House to snap: ${houseToSnapDistance}m")
+        Log.d(TAG, "  On street side: $isOnStreetSide")
+        Log.d(TAG, "  Trigger tolerance: ${TRIGGER_TOLERANCE}m")
+
+        when {
+            // SOFORT TRIGGER: Nah an Trigger-LINIE UND auf Straßenseite
+            isOnStreetSide && distanceToTriggerLine <= TRIGGER_TOLERANCE -> {
+                Log.d(TAG, "Near trigger LINE on street side - TRIGGER!")
+
+                onLogEntry(LogEntry(
+                    timestamp = System.currentTimeMillis(),
+                    distance = distanceToTriggerLine,
+                    accuracy = currentLocation.accuracy,
+                    speedKmh = 0f,
+                    category = SpeedCategory.WALKING,
+                    mode = PrecisionMode.HIGH_ACCURACY,
+                    nextCheckSec = 0f,
+                    event = "\uD83C\uDFAF An Trigger-Linie! (${distanceToTriggerLine.toInt()}m, Toleranz: ${TRIGGER_TOLERANCE.toInt()}m)"
+                ))
+
+                updateState(WifiStatus.TRIGGERED)
+                onTrigger()
+                return
+            }
+
+            // Noch sehr nah am Haus (nicht auf Straßenseite)
+            !isOnStreetSide && distanceFromHouse < houseToSnapDistance -> {
+                Log.d(TAG, "At home or at boundary - no trigger")
+
+                onLogEntry(LogEntry(
+                    timestamp = System.currentTimeMillis(),
+                    distance = distanceFromHouse,
+                    accuracy = currentLocation.accuracy,
+                    speedKmh = 0f,
+                    category = SpeedCategory.STILL,
+                    mode = PrecisionMode.LOW_POWER,
+                    nextCheckSec = 30f,
+                    event = "\uD83C\uDFE0 Noch zuhause (${distanceFromHouse.toInt()}m vom Haus)"
+                ))
+
+                updateState(WifiStatus.WIFI_OUTAGE)
+                scheduleRecheck()
+            }
+
+            // Im Garten/Hinterhof (weit vom Snap, aber nicht auf Straßenseite)
+            !isOnStreetSide && distanceFromSnap > TRIGGER_TOLERANCE -> {
+                Log.d(TAG, "In garden/backyard - no trigger")
+
+                onLogEntry(LogEntry(
+                    timestamp = System.currentTimeMillis(),
+                    distance = distanceFromHouse,
+                    accuracy = currentLocation.accuracy,
+                    speedKmh = 0f,
+                    category = SpeedCategory.STILL,
+                    mode = PrecisionMode.LOW_POWER,
+                    nextCheckSec = 60f,
+                    event = "\uD83C\uDF33 Im Garten (${distanceFromHouse.toInt()}m) - kein Exit"
+                ))
+
+                updateState(WifiStatus.WIFI_OUTAGE)
+                scheduleRecheck()
+            }
+
+            // Auf Straßenseite aber außerhalb Toleranz - beobachten
+            isOnStreetSide && distanceFromSnap > TRIGGER_TOLERANCE && distanceFromSnap < DISTANCE_MAYBE_LEAVING -> {
+                Log.d(TAG, "On street side, outside tolerance - tracking movement")
+
+                onLogEntry(LogEntry(
+                    timestamp = System.currentTimeMillis(),
+                    distance = distanceFromSnap,
+                    accuracy = currentLocation.accuracy,
+                    speedKmh = 0f,
+                    category = SpeedCategory.WALKING,
+                    mode = PrecisionMode.HIGH_ACCURACY,
+                    nextCheckSec = MOVEMENT_CHECK_INTERVAL / 1000f,
+                    event = "\uD83D\uDEB6 Auf Straße (${distanceFromSnap.toInt()}m) - beobachte..."
+                ))
+
+                updateState(WifiStatus.TRACKING_MOVEMENT)
+                startMovementTracking(currentLocation)
+            }
+
+            // Definitiv auf Straßenseite und weit genug weg
+            isOnStreetSide && distanceFromSnap >= DISTANCE_MAYBE_LEAVING -> {
+                Log.d(TAG, "Definitely on street side and moving away - TRIGGER!")
+
+                onLogEntry(LogEntry(
+                    timestamp = System.currentTimeMillis(),
+                    distance = distanceFromSnap,
+                    accuracy = currentLocation.accuracy,
+                    speedKmh = 0f,
+                    category = SpeedCategory.WALKING,
+                    mode = PrecisionMode.HIGH_ACCURACY,
+                    nextCheckSec = 0f,
+                    event = "\uD83C\uDFAF EXIT! Auf Straße, ${distanceFromSnap.toInt()}m vom Snap Point"
+                ))
+
+                updateState(WifiStatus.TRIGGERED)
+                onTrigger()
+            }
+
+            else -> {
+                // Fallback: Weiter beobachten
+                Log.d(TAG, "Uncertain state - continue monitoring")
+                scheduleRecheck()
+            }
+        }
+
+        // State aktualisieren für UI
+        updateState(if (isWifiConnected) WifiStatus.CONNECTED else WifiStatus.WIFI_OUTAGE)
+    }
+
+    /**
+     * Fallback: Einfache Distanz-Prüfung (ohne Direction Detection)
+     */
+    private fun evaluateSimpleDistance(currentLocation: Location) {
         val home = homeLocation
 
         if (home == null) {
@@ -293,7 +685,7 @@ class WifiLocationManager(
 
         val distanceFromHome = currentLocation.distanceTo(home)
 
-        Log.d(TAG, "Distance from home: ${distanceFromHome}m (accuracy: ${currentLocation.accuracy}m)")
+        Log.d(TAG, "Simple distance check: ${distanceFromHome}m from home (accuracy: ${currentLocation.accuracy}m)")
 
         when {
             distanceFromHome < DISTANCE_STILL_HOME -> {
@@ -312,8 +704,6 @@ class WifiLocationManager(
                 ))
 
                 updateState(WifiStatus.WIFI_OUTAGE)
-
-                // Recheck in 30 Sek falls WLAN nicht wiederkommt
                 scheduleRecheck()
             }
 
@@ -394,6 +784,160 @@ class WifiLocationManager(
     }
 
     private fun evaluateMovement(currentLocation: Location) {
+        val house = houseCenter
+        val snap = snapPoint
+
+        // Direction Detection aktiv?
+        if (house != null && snap != null) {
+            evaluateMovementWithDirection(currentLocation, house, snap)
+        } else {
+            evaluateMovementSimple(currentLocation)
+        }
+    }
+
+    /**
+     * Movement Evaluation mit Direction Detection
+     * Nutzt jetzt Trigger-LINIE statt Kreis
+     */
+    private fun evaluateMovementWithDirection(currentLocation: Location, house: Location, snap: Location) {
+        val distanceFromHouse = currentLocation.distanceTo(house)
+        val distanceFromSnap = currentLocation.distanceTo(snap)
+
+        // Berechne Distanz zur Trigger-LINIE (wenn vorhanden)
+        val distanceToTriggerLine = if (triggerLineStart != null && triggerLineEnd != null) {
+            RoadSnapService.distanceToLineSegment(
+                currentLocation.latitude, currentLocation.longitude,
+                triggerLineStart!!.first, triggerLineStart!!.second,
+                triggerLineEnd!!.first, triggerLineEnd!!.second
+            )
+        } else {
+            distanceFromSnap  // Fallback
+        }
+
+        val isOnStreetSide = distanceFromHouse > (houseToSnapDistance - 5f)
+        currentIsOnStreetSide = isOnStreetSide
+
+        // Bewegung seit letztem Check
+        val lastPos = lastMovementLocation ?: return
+        val distanceMoved = currentLocation.distanceTo(lastPos)
+        val speedMps = distanceMoved / (MOVEMENT_CHECK_INTERVAL / 1000f)
+        val speedKmh = speedMps * 3.6f
+
+        // Richtung: Entfernt sich vom Haus?
+        val lastDistanceFromHouse = lastPos.distanceTo(house)
+        val movingAway = distanceFromHouse > lastDistanceFromHouse
+
+        Log.d(TAG, "Movement check #$movementCheckCount:")
+        Log.d(TAG, "  Distance from house: ${distanceFromHouse}m (was ${lastDistanceFromHouse}m)")
+        Log.d(TAG, "  Distance to trigger LINE: ${distanceToTriggerLine}m")
+        Log.d(TAG, "  On street side: $isOnStreetSide")
+        Log.d(TAG, "  Moving away: $movingAway")
+        Log.d(TAG, "  Speed: ${speedKmh} km/h")
+
+        onLogEntry(LogEntry(
+            timestamp = System.currentTimeMillis(),
+            distance = distanceFromHouse,
+            accuracy = currentLocation.accuracy,
+            speedKmh = speedKmh,
+            category = if (speedKmh > 2) SpeedCategory.WALKING else SpeedCategory.STILL,
+            mode = PrecisionMode.HIGH_ACCURACY,
+            nextCheckSec = MOVEMENT_CHECK_INTERVAL / 1000f,
+            event = "\uD83D\uDCCD Check #$movementCheckCount: ${if (movingAway) "\u2197\uFE0F entfernt sich" else "\u2199\uFE0F nähert sich"}"
+        ))
+
+        when {
+            // SOFORT TRIGGER: Nah an Trigger-LINIE UND auf Straßenseite
+            isOnStreetSide && distanceToTriggerLine <= TRIGGER_TOLERANCE -> {
+                Log.d(TAG, "Near trigger LINE during movement - TRIGGER!")
+
+                onLogEntry(LogEntry(
+                    timestamp = System.currentTimeMillis(),
+                    distance = distanceToTriggerLine,
+                    accuracy = currentLocation.accuracy,
+                    speedKmh = speedKmh,
+                    category = SpeedCategory.WALKING,
+                    mode = PrecisionMode.HIGH_ACCURACY,
+                    nextCheckSec = 0f,
+                    event = "\uD83C\uDFAF An Trigger-Linie! (${distanceToTriggerLine.toInt()}m, Toleranz: ${TRIGGER_TOLERANCE.toInt()}m)"
+                ))
+
+                isTrackingMovement = false
+                updateState(WifiStatus.TRIGGERED)
+                onTrigger()
+            }
+
+            // Zurück ins Haus/Garten (nicht mehr auf Straßenseite)
+            !isOnStreetSide -> {
+                Log.d(TAG, "Returned to house side - cancelling")
+
+                onLogEntry(LogEntry(
+                    timestamp = System.currentTimeMillis(),
+                    distance = distanceFromHouse,
+                    accuracy = currentLocation.accuracy,
+                    speedKmh = speedKmh,
+                    category = SpeedCategory.STILL,
+                    mode = PrecisionMode.LOW_POWER,
+                    nextCheckSec = 0f,
+                    event = "\uD83C\uDFE0 Zurück (nicht mehr auf Straßenseite)"
+                ))
+
+                isTrackingMovement = false
+                updateState(WifiStatus.WIFI_OUTAGE)
+                scheduleRecheck()
+            }
+
+            // Auf Straßenseite + entfernt sich + genug Checks = EXIT!
+            isOnStreetSide && movingAway && movementCheckCount >= MOVEMENT_CHECKS_NEEDED -> {
+                Log.d(TAG, "Confirmed exit - TRIGGER!")
+
+                onLogEntry(LogEntry(
+                    timestamp = System.currentTimeMillis(),
+                    distance = distanceFromHouse,
+                    accuracy = currentLocation.accuracy,
+                    speedKmh = speedKmh,
+                    category = SpeedCategory.WALKING,
+                    mode = PrecisionMode.HIGH_ACCURACY,
+                    nextCheckSec = 0f,
+                    event = "\uD83C\uDFAF EXIT bestätigt! ${movementCheckCount}x auf Straßenseite + entfernt sich"
+                ))
+
+                isTrackingMovement = false
+                updateState(WifiStatus.TRIGGERED)
+                onTrigger()
+            }
+
+            // Auf Straßenseite + sehr weit weg = sofort EXIT
+            isOnStreetSide && distanceFromSnap > DISTANCE_DEFINITELY_LEFT -> {
+                Log.d(TAG, "Far from snap point - TRIGGER!")
+
+                onLogEntry(LogEntry(
+                    timestamp = System.currentTimeMillis(),
+                    distance = distanceFromSnap,
+                    accuracy = currentLocation.accuracy,
+                    speedKmh = speedKmh,
+                    category = SpeedCategory.WALKING,
+                    mode = PrecisionMode.HIGH_ACCURACY,
+                    nextCheckSec = 0f,
+                    event = "\uD83C\uDFAF EXIT! ${distanceFromSnap.toInt()}m von Straße entfernt"
+                ))
+
+                isTrackingMovement = false
+                updateState(WifiStatus.TRIGGERED)
+                onTrigger()
+            }
+
+            // Weiter beobachten
+            else -> {
+                lastMovementLocation = currentLocation
+                scheduleMovementCheck()
+            }
+        }
+    }
+
+    /**
+     * Fallback Movement Evaluation (ohne Direction Detection)
+     */
+    private fun evaluateMovementSimple(currentLocation: Location) {
         val home = homeLocation ?: return
         val lastPos = lastMovementLocation ?: return
 
@@ -481,9 +1025,14 @@ class WifiLocationManager(
             status = status,
             ssid = homeWifiSSID,
             homeLocation = homeLocation,
+            snapLocation = snapPoint,
+            houseToSnapDistance = houseToSnapDistance,
+            isOnStreetSide = currentIsOnStreetSide,
             isConnected = isWifiConnected,
             disconnectTime = disconnectTime,
-            movementCheckCount = movementCheckCount
+            movementCheckCount = movementCheckCount,
+            triggerLineStart = triggerLineStart,
+            triggerLineEnd = triggerLineEnd
         )
         onStateUpdate(state)
     }
@@ -504,7 +1053,13 @@ data class WifiState(
     val status: WifiStatus = WifiStatus.DISCONNECTED,
     val ssid: String? = null,
     val homeLocation: Location? = null,
+    val snapLocation: Location? = null,
+    val houseToSnapDistance: Float = 0f,
+    val isOnStreetSide: Boolean? = null,
     val isConnected: Boolean = false,
     val disconnectTime: Long? = null,
-    val movementCheckCount: Int = 0
+    val movementCheckCount: Int = 0,
+    // Trigger-Linie entlang der Straße (statt Kreis)
+    val triggerLineStart: Pair<Double, Double>? = null,
+    val triggerLineEnd: Pair<Double, Double>? = null
 )
