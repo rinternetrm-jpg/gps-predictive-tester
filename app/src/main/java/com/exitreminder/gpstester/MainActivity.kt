@@ -1,6 +1,7 @@
 package com.exitreminder.gpstester
 
 import android.Manifest
+import android.annotation.SuppressLint
 import android.app.AlertDialog
 import android.content.*
 import android.content.pm.PackageManager
@@ -25,6 +26,7 @@ import kotlinx.coroutines.withContext
 import androidx.core.app.ActivityCompat
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import com.google.android.gms.location.LocationServices
 import org.osmdroid.config.Configuration
 import org.osmdroid.tileprovider.tilesource.TileSourceFactory
 import org.osmdroid.util.GeoPoint
@@ -111,6 +113,18 @@ class MainActivity : AppCompatActivity() {
     private var service: ForegroundLocationService? = null
     private var isBound = false
 
+    // Geofence Wake-Up Manager
+    private var geofenceManager: GeofenceWakeupManager? = null
+    private var currentReminderId: String = ""
+    private var isInSleepMode: Boolean = false
+
+    // Sleep Status UI
+    private lateinit var sleepStatusSection: LinearLayout
+    private lateinit var tvSleepIcon: TextView
+    private lateinit var tvSleepStatus: TextView
+    private lateinit var tvSleepDetail: TextView
+    private lateinit var tvSleepBattery: TextView
+
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
             val localBinder = binder as ForegroundLocationService.LocalBinder
@@ -130,6 +144,9 @@ class MainActivity : AppCompatActivity() {
         initViews()
         setupListeners()
         checkPermissions()
+
+        // Geofence Manager initialisieren
+        geofenceManager = GeofenceWakeupManager(this)
     }
 
     private fun initViews() {
@@ -168,6 +185,13 @@ class MainActivity : AppCompatActivity() {
 
         rvLog.layoutManager = LinearLayoutManager(this)
         rvLog.adapter = logAdapter
+
+        // Sleep Status Views
+        sleepStatusSection = findViewById(R.id.sleepStatusSection)
+        tvSleepIcon = findViewById(R.id.tvSleepIcon)
+        tvSleepStatus = findViewById(R.id.tvSleepStatus)
+        tvSleepDetail = findViewById(R.id.tvSleepDetail)
+        tvSleepBattery = findViewById(R.id.tvSleepBattery)
 
         // OSMDroid konfigurieren
         initMap()
@@ -722,6 +746,26 @@ class MainActivity : AppCompatActivity() {
         btnSearch.isEnabled = false
         btnSearch.text = "..."
 
+        // Toast zur Bestätigung
+        Toast.makeText(this, "🔎 Suche: $address", Toast.LENGTH_SHORT).show()
+
+        // KLARER SEPARATOR im Log
+        logAdapter.addEntry(LogEntry(
+            timestamp = System.currentTimeMillis(),
+            distance = 0f, accuracy = 0f, speedKmh = 0f,
+            category = SpeedCategory.STILL, mode = PrecisionMode.LOW_POWER, nextCheckSec = 0f,
+            event = "━━━━━━━━━━━━━━━━━━━━"
+        ))
+        logAdapter.addEntry(LogEntry(
+            timestamp = System.currentTimeMillis(),
+            distance = 0f, accuracy = 0f, speedKmh = 0f,
+            category = SpeedCategory.STILL, mode = PrecisionMode.LOW_POWER, nextCheckSec = 0f,
+            event = "🔎 SUCHE: '$address'"
+        ))
+
+        // RecyclerView nach oben scrollen
+        rvLog.scrollToPosition(0)
+
         CoroutineScope(Dispatchers.Main).launch {
             try {
                 // 1. Geocoding (Hausmitte)
@@ -847,6 +891,12 @@ class MainActivity : AppCompatActivity() {
                 }
 
             } catch (e: Exception) {
+                logAdapter.addEntry(LogEntry(
+                    timestamp = System.currentTimeMillis(),
+                    distance = 0f, accuracy = 0f, speedKmh = 0f,
+                    category = SpeedCategory.STILL, mode = PrecisionMode.LOW_POWER, nextCheckSec = 0f,
+                    event = "❌ FEHLER: ${e.javaClass.simpleName}: ${e.message}"
+                ))
                 Toast.makeText(this@MainActivity, "Fehler: ${e.message}", Toast.LENGTH_SHORT).show()
                 snapInfoSection.visibility = View.GONE
             } finally {
@@ -873,6 +923,114 @@ class MainActivity : AppCompatActivity() {
         targetLng = lng
         startDistanceValue = 0f
 
+        // Generiere Reminder ID
+        currentReminderId = "reminder_${System.currentTimeMillis()}"
+
+        btnStart.isEnabled = false
+        btnStop.isEnabled = true
+        logAdapter.clear()
+
+        // Hole aktuelle Position um Entfernung zu berechnen
+        getCurrentLocation { currentLocation ->
+            val distanceToTarget = if (currentLocation != null) {
+                val results = FloatArray(1)
+                android.location.Location.distanceBetween(
+                    currentLocation.latitude, currentLocation.longitude,
+                    lat, lng, results
+                )
+                results[0]
+            } else {
+                null
+            }
+
+            android.util.Log.d("MainActivity", "Distance to target: ${distanceToTarget}m")
+
+            // Entscheidung: Geofence oder direkt Tracking?
+            if (distanceToTarget != null && distanceToTarget > GeofenceWakeupManager.MIN_DISTANCE_FOR_GEOFENCE) {
+                // WEIT WEG -> Geofence registrieren und schlafen
+                isInSleepMode = true
+                showSleepMode(distanceToTarget)
+
+                geofenceManager?.registerWakeUpGeofence(
+                    reminderId = currentReminderId,
+                    targetLat = lat,
+                    targetLng = lng,
+                    currentDistanceMeters = distanceToTarget,
+                    onWakeUp = {
+                        runOnUiThread {
+                            isInSleepMode = false
+                            showWakeUpMode()
+                            startPredictiveTracking(lat, lng, radius)
+                        }
+                    }
+                )
+
+                logAdapter.addEntry(LogEntry(
+                    timestamp = System.currentTimeMillis(),
+                    distance = distanceToTarget,
+                    accuracy = 0f,
+                    speedKmh = 0f,
+                    category = SpeedCategory.STILL,
+                    mode = PrecisionMode.LOW_POWER,
+                    nextCheckSec = 0f,
+                    event = "😴 SCHLAFMODUS - Ziel ${(distanceToTarget/1000).toInt()}km entfernt"
+                ))
+
+                logAdapter.addEntry(LogEntry(
+                    timestamp = System.currentTimeMillis(),
+                    distance = 500f,
+                    accuracy = 0f,
+                    speedKmh = 0f,
+                    category = SpeedCategory.STILL,
+                    mode = PrecisionMode.LOW_POWER,
+                    nextCheckSec = 0f,
+                    event = "📍 Android Geofence registriert (500m Radius)"
+                ))
+
+                Toast.makeText(this, "😴 Schlafmodus - Warte auf 500m Nähe", Toast.LENGTH_LONG).show()
+
+            } else {
+                // NAH GENUG -> Direkt Predictive Tracking starten
+                isInSleepMode = false
+                showWakeUpMode()
+                startPredictiveTracking(lat, lng, radius)
+
+                logAdapter.addEntry(LogEntry(
+                    timestamp = System.currentTimeMillis(),
+                    distance = distanceToTarget ?: 0f,
+                    accuracy = 0f,
+                    speedKmh = 0f,
+                    category = SpeedCategory.STILL,
+                    mode = PrecisionMode.HIGH_ACCURACY,
+                    nextCheckSec = 0f,
+                    event = "🎯 Ziel nah genug - starte Predictive Tracking"
+                ))
+
+                Toast.makeText(this, "🚀 Predictive Tracking gestartet", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
+    /**
+     * Hilfsmethode: Aktuelle Position holen
+     */
+    @SuppressLint("MissingPermission")
+    private fun getCurrentLocation(callback: (android.location.Location?) -> Unit) {
+        val fusedClient = LocationServices.getFusedLocationProviderClient(this)
+
+        fusedClient.lastLocation
+            .addOnSuccessListener { location ->
+                callback(location)
+            }
+            .addOnFailureListener {
+                callback(null)
+            }
+    }
+
+    /**
+     * Startet das Predictive Tracking (bisherige Logik)
+     */
+    private fun startPredictiveTracking(lat: Double, lng: Double, radius: Float) {
         // Akku-Level am Start messen
         val batteryManager = getSystemService(Context.BATTERY_SERVICE) as BatteryManager
         val batteryLevel = batteryManager.getIntProperty(BatteryManager.BATTERY_PROPERTY_CAPACITY)
@@ -882,7 +1040,7 @@ class MainActivity : AppCompatActivity() {
         startForegroundService(serviceIntent)
         bindService(serviceIntent, connection, Context.BIND_AUTO_CREATE)
 
-        // Create location manager
+        // Create location manager (BESTEHENDES SYSTEM)
         locationManager = PredictiveLocationManager(
             context = this,
             targetLat = lat,
@@ -897,7 +1055,7 @@ class MainActivity : AppCompatActivity() {
         locationManager?.setBatteryStart(batteryLevel)
         locationManager?.startTracking()
 
-        // WLAN Hybrid Modus starten wenn aktiviert
+        // WLAN Hybrid auch starten wenn aktiviert
         if (switchWifiHybrid.isChecked) {
             wifiManager = WifiLocationManager(
                 context = this,
@@ -907,18 +1065,46 @@ class MainActivity : AppCompatActivity() {
             )
             wifiManager?.startMonitoring()
         }
+    }
 
-        btnStart.isEnabled = false
-        btnStop.isEnabled = true
+    /**
+     * UI Methode: Zeigt Schlafmodus an
+     */
+    private fun showSleepMode(distanceMeters: Float) {
+        sleepStatusSection.visibility = View.VISIBLE
+        tvSleepIcon.text = "😴"
+        tvSleepStatus.text = "SCHLAFMODUS"
+        tvSleepStatus.setTextColor(0xFFa855f7.toInt())  // Lila
+        tvSleepDetail.text = "Ziel ${(distanceMeters/1000).toInt()}km entfernt - Warte auf 500m Nähe"
+        tvSleepBattery.text = "🔋 0%"
+        tvSleepBattery.setTextColor(0xFF22c55e.toInt())  // Grün
+    }
 
-        logAdapter.clear()
-        Toast.makeText(this, "\uD83D\uDE80 Tracking gestartet", Toast.LENGTH_SHORT).show()
+    /**
+     * UI Methode: Zeigt aktives Tracking an
+     */
+    private fun showWakeUpMode() {
+        sleepStatusSection.visibility = View.VISIBLE
+        tvSleepIcon.text = "☀️"
+        tvSleepStatus.text = "AKTIV"
+        tvSleepStatus.setTextColor(0xFF22c55e.toInt())  // Grün
+        tvSleepDetail.text = "Predictive Tracking läuft"
+        tvSleepBattery.text = "🔋 Tracking"
+        tvSleepBattery.setTextColor(0xFFf97316.toInt())  // Orange
     }
 
     private fun stopTracking() {
+        // Geofence entfernen (falls im Schlafmodus)
+        if (currentReminderId.isNotEmpty()) {
+            geofenceManager?.unregisterGeofence(currentReminderId)
+        }
+        isInSleepMode = false
+
+        // Predictive Tracking stoppen (BESTEHENDES)
         locationManager?.stopTracking()
         locationManager = null
 
+        // WLAN stoppen (BESTEHENDES)
         wifiManager?.stopMonitoring()
         wifiManager = null
 
@@ -928,10 +1114,12 @@ class MainActivity : AppCompatActivity() {
         }
         stopService(Intent(this, ForegroundLocationService::class.java))
 
+        // UI Reset
+        sleepStatusSection.visibility = View.GONE
         btnStart.isEnabled = true
         btnStop.isEnabled = false
 
-        Toast.makeText(this, "\u23F9\uFE0F Tracking gestoppt", Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, "⏹️ Tracking gestoppt", Toast.LENGTH_SHORT).show()
     }
 
     private fun updateUI(state: PredictiveState) {
@@ -986,6 +1174,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun onTrigger(stats: TrackingStats) {
+        // Geofence aufräumen
+        if (currentReminderId.isNotEmpty()) {
+            geofenceManager?.unregisterGeofence(currentReminderId)
+        }
+
         // Vibration
         val vibrator = getSystemService(Context.VIBRATOR_SERVICE) as Vibrator
         vibrator.vibrate(VibrationEffect.createWaveform(longArrayOf(0, 200, 100, 200, 100, 400), -1))
@@ -1383,6 +1576,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        geofenceManager?.cleanup()
         stopTracking()
     }
 }

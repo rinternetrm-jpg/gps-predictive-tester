@@ -43,6 +43,60 @@
                     android:layout_marginTop="4dp" />
             </LinearLayout>
 
+            <!-- Sleep/Wake Status -->
+            <LinearLayout
+                android:id="@+id/sleepStatusSection"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal"
+                android:padding="12dp"
+                android:background="#1a1a2e"
+                android:gravity="center_vertical"
+                android:visibility="gone">
+
+                <TextView
+                    android:id="@+id/tvSleepIcon"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="😴"
+                    android:textSize="24sp" />
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:orientation="vertical"
+                    android:layout_marginStart="12dp">
+
+                    <TextView
+                        android:id="@+id/tvSleepStatus"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="SCHLAFMODUS"
+                        android:textSize="12sp"
+                        android:textStyle="bold"
+                        android:textColor="#a855f7" />
+
+                    <TextView
+                        android:id="@+id/tvSleepDetail"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Warte auf Android Geofence (500m)"
+                        android:textSize="11sp"
+                        android:textColor="#9898a8" />
+
+                </LinearLayout>
+
+                <TextView
+                    android:id="@+id/tvSleepBattery"
+                    android:layout_width="wrap_content"
+                    android:layout_height="wrap_content"
+                    android:text="🔋 0%"
+                    android:textSize="12sp"
+                    android:textColor="#22c55e" />
+
+            </LinearLayout>
+
             <!-- Target Input -->
             <LinearLayout
                 android:layout_width="match_parent"

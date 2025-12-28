@@ -35,5 +35,14 @@
             android:foregroundServiceType="location"
             android:exported="false" />
 
+        <!-- Geofence Broadcast Receiver -->
+        <receiver
+            android:name=".GeofenceBroadcastReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.exitreminder.gpstester.GEOFENCE_EVENT" />
+            </intent-filter>
+        </receiver>
+
     </application>
 </manifest>
