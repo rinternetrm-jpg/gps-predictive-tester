@@ -812,6 +812,18 @@
         </LinearLayout>
     </ScrollView>
 
+    <!-- Trigger-Linien Button -->
+    <Button
+        android:id="@+id/btnEditTriggerLines"
+        android:layout_width="match_parent"
+        android:layout_height="40dp"
+        android:layout_marginHorizontal="12dp"
+        android:layout_marginTop="4dp"
+        android:text="✏️ TRIGGER-LINIEN BEARBEITEN"
+        android:textColor="#a855f7"
+        android:textSize="12sp"
+        android:background="@android:color/transparent" />
+
     <!-- Buttons (fixiert unten) -->
     <LinearLayout
         android:layout_width="match_parent"

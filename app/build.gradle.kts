@@ -11,8 +11,8 @@ android {
         applicationId = "com.exitreminder.gpstester"
         minSdk = 26
         targetSdk = 34
-        versionCode = 34
-        versionName = "3.3.0"
+        versionCode = 35
+        versionName = "3.4.0"
     }
 
     buildTypes {
@@ -49,4 +49,7 @@ dependencies {
 
     // Coroutines für async Snap to Road
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
+
+    // Gson für JSON Serialisierung
+    implementation("com.google.code.gson:gson:2.10.1")
 }

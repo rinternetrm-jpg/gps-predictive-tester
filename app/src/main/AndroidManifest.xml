@@ -30,6 +30,11 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".FullscreenMapActivity"
+            android:exported="false"
+            android:theme="@style/Theme.Material3.Dark.NoActionBar" />
+
         <service
             android:name=".ForegroundLocationService"
             android:foregroundServiceType="location"

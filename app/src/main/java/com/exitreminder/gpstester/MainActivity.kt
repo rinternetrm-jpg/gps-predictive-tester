@@ -37,6 +37,7 @@ import org.osmdroid.views.overlay.Polygon
 import org.osmdroid.views.overlay.Polyline
 import java.io.File
 import java.util.*
+import com.google.gson.Gson
 
 class MainActivity : AppCompatActivity() {
 
@@ -74,6 +75,15 @@ class MainActivity : AppCompatActivity() {
     private lateinit var tvRoadName: TextView
 
     private val logAdapter = LogAdapter()
+
+    // Trigger-Linien Editor
+    private var triggerLineSet: TriggerLineSet? = null
+    private val gson = Gson()
+    private lateinit var btnEditTriggerLines: Button
+
+    companion object {
+        const val REQUEST_MAP = 1001
+    }
 
     // Map Marker
     private var currentPosMarker: Marker? = null
@@ -192,6 +202,9 @@ class MainActivity : AppCompatActivity() {
         tvSleepStatus = findViewById(R.id.tvSleepStatus)
         tvSleepDetail = findViewById(R.id.tvSleepDetail)
         tvSleepBattery = findViewById(R.id.tvSleepBattery)
+
+        // Trigger-Linien Editor Button
+        btnEditTriggerLines = findViewById(R.id.btnEditTriggerLines)
 
         // OSMDroid konfigurieren
         initMap()
@@ -723,6 +736,76 @@ class MainActivity : AppCompatActivity() {
         btnSetWifiHome.setOnClickListener {
             setWifiHomeManually()
         }
+
+        // Trigger-Linien Editor öffnen
+        btnEditTriggerLines.setOnClickListener {
+            openFullscreenMap()
+        }
+    }
+
+    private fun openFullscreenMap() {
+        val lat = etLat.text.toString().toDoubleOrNull()
+        val lng = etLng.text.toString().toDoubleOrNull()
+
+        if (lat == null || lng == null) {
+            Toast.makeText(this, "Bitte zuerst Koordinaten eingeben", Toast.LENGTH_SHORT).show()
+            return
+        }
+
+        val intent = Intent(this, FullscreenMapActivity::class.java).apply {
+            putExtra(FullscreenMapActivity.EXTRA_LAT, lat)
+            putExtra(FullscreenMapActivity.EXTRA_LNG, lng)
+            triggerLineSet?.let {
+                putExtra(FullscreenMapActivity.EXTRA_LINES_JSON, gson.toJson(it))
+            }
+        }
+        @Suppress("DEPRECATION")
+        startActivityForResult(intent, REQUEST_MAP)
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        @Suppress("DEPRECATION")
+        super.onActivityResult(requestCode, resultCode, data)
+
+        if (requestCode == REQUEST_MAP && resultCode == RESULT_OK) {
+            data?.getStringExtra(FullscreenMapActivity.RESULT_LINES_JSON)?.let { json ->
+                triggerLineSet = gson.fromJson(json, TriggerLineSet::class.java)
+                Toast.makeText(this, "✓ ${triggerLineSet?.lines?.size} Trigger-Linien gespeichert", Toast.LENGTH_SHORT).show()
+                // Log entry zur Info
+                logAdapter.addEntry(LogEntry(
+                    timestamp = System.currentTimeMillis(),
+                    distance = 0f,
+                    accuracy = 0f,
+                    speedKmh = 0f,
+                    category = SpeedCategory.STILL,
+                    mode = PrecisionMode.LOW_POWER,
+                    nextCheckSec = 0f,
+                    event = "📍 ${triggerLineSet?.lines?.size} Trigger-Linien konfiguriert"
+                ))
+
+                // Update Map Display
+                updateTriggerLinesOnMap()
+            }
+        }
+    }
+
+    private fun updateTriggerLinesOnMap() {
+        // Alte Linien entfernen
+        triggerLine?.let { mapView.overlays.remove(it) }
+
+        // Neue Linien zeichnen
+        triggerLineSet?.lines?.forEach { line ->
+            val (p1, p2) = line.getEndpoints()
+            val polyline = Polyline().apply {
+                addPoint(p1)
+                addPoint(p2)
+                outlinePaint.color = if (line.isActive) Color.parseColor("#a855f7") else Color.GRAY
+                outlinePaint.strokeWidth = 6f
+            }
+            mapView.overlays.add(polyline)
+        }
+        mapView.invalidate()
     }
 
     private fun setWifiHomeManually() {
